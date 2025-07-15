@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import pandas as pd
-import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
 # Streamlit 앱 제목
@@ -46,14 +45,10 @@ if st.sidebar.button("데이터 불러오기"):
                 st.subheader("월별 경영지표 테이블")
                 st.dataframe(df_monthly)
                 
-                # 그래프 표시
+                # 그래프 표시 (Streamlit 내장 차트 사용)
                 st.subheader("월별 매출 추이 그래프")
-                fig, ax = plt.subplots(figsize=(10, 5))
-                ax.plot(df_monthly.index, df_monthly['amount'], label='월별 매출', marker='o')
-                ax.set_xlabel('월')
-                ax.set_ylabel('매출액')
-                ax.legend()
-                st.pyplot(fig)
+                df_chart = df_monthly.reset_index()[['date', 'amount']].rename(columns={'date': '월', 'amount': '매출액'})
+                st.line_chart(df_chart, x='월', y='매출액')
                 
                 # 추가 지표 예시
                 total_sales = df['amount'].sum()
