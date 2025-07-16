@@ -1,138 +1,262 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import requests  # 이카운트 API 요청을 위해 필요
+import requests
+from datetime import datetime, timedelta
 
 # --------------------------------------------------------------------------
-# 이카운트 ERP API 연동 (가상 함수)
-# 실제 환경에서는 이 부분에 이카운트 API와 통신하는 코드를 작성해야 합니다.
+# Streamlit 페이지 설정
+# --------------------------------------------------------------------------
+st.set_page_config(layout="wide", page_title="Ecount 경영지표 대시보드")
+
+st.title("📈 Ecount ERP 경영지표 대시보드")
+st.markdown("이카운트 ERP 데이터를 활용한 실시간 경영 현황 분석")
+
+# --------------------------------------------------------------------------
+# 이카운트 ERP API 연동 함수
+# @st.cache_data: API 응답을 캐싱하여 반복적인 호출 방지 및 속도 향상
 # --------------------------------------------------------------------------
 
-def get_ecount_data(api_key, start_date, end_date):
-    """
-    이카운트 ERP에서 데이터를 가져오는 함수 (가상).
-    실제로는 requests 라이브러리를 사용하여 API에 요청을 보내야 합니다.
-    """
-    # === 실제 API 연동 시 필요한 부분 ===
-    # API_URL = "https://oapi.ecount.com/OAPI/V2/..."  # 실제 API 엔드포인트
-    # headers = {"Authorization": f"Bearer {api_key}"}
-    # params = {
-    #     "start_date": start_date,
-    #     "end_date": end_date,
-    #     # 기타 필요한 파라미터 추가
-    # }
-    # response = requests.get(API_URL, headers=headers, params=params)
-    # if response.status_code == 200:
-    #     return response.json()
-    # else:
-    #     st.error("이카운트 API 데이터 조회에 실패했습니다.")
-    #     return None
-    # =====================================
+BASE_URL = "https://oapi.ecount.com/OAPI/V2"
 
-    # --- 가상 데이터 생성 (실제 API 연동 전 테스트용) ---
-    data = {
-        'date': pd.to_datetime(pd.date_range(start_date, end_date)),
-        'sales': [150, 200, 180, 220, 250, 230, 270, 300, 280, 320, 350, 330, 380, 400, 390],
-        'purchase': [100, 120, 110, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240],
-        'inventory': [500, 530, 500, 590, 600, 680, 700, 730, 750, 780, 800, 820, 850, 880, 900],
-        'profit': [50, 80, 70, 90, 110, 80, 110, 130, 100, 130, 150, 120, 160, 170, 150]
+# 세일즈 데이터 로드 함수
+@st.cache_data
+def get_sales_data(zone_code, com_code, api_key, start_date, end_date):
+    """이카운트에서 판매입력 데이터를 가져옵니다."""
+    endpoint = "/Voucher/GetSalesList"
+    url = f"{BASE_URL}{endpoint}"
+    headers = {
+        'Content-Type': 'application/json',
     }
-    # 날짜 길이에 맞게 데이터 슬라이싱
-    num_days = len(data['date'])
-    for key in ['sales', 'purchase', 'inventory', 'profit']:
-        data[key] = data[key][:num_days]
+    payload = {
+        "Request": {
+            "ZONE": zone_code,
+            "COM_CODE": com_code,
+            "API_CERT_KEY": api_key,
+            "LAN_TYPE": "ko-KR",
+            "Date": {
+                "TYPE": "0",  # 전표일자 기준
+                "FROM": start_date,
+                "TO": end_date
+            }
+        }
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()  # HTTP 오류 발생 시 예외 발생
+        data = response.json()
+        if data.get("Status") == "200" and "Data" in data:
+            return pd.DataFrame(data["Data"])
+        else:
+            st.error(f"판매 데이터 조회 실패: {data.get('Errors', [{}])[0].get('Message', '알 수 없는 오류')}")
+            return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"API 요청 오류 (판매): {e}")
+        return None
 
-    return pd.DataFrame(data)
-    # --------------------------------------------------
+# 구매 데이터 로드 함수
+@st.cache_data
+def get_purchase_data(zone_code, com_code, api_key, start_date, end_date):
+    """이카운트에서 구매입력 데이터를 가져옵니다."""
+    endpoint = "/Voucher/GetPurchaseList"
+    url = f"{BASE_URL}{endpoint}"
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "Request": {
+            "ZONE": zone_code,
+            "COM_CODE": com_code,
+            "API_CERT_KEY": api_key,
+            "LAN_TYPE": "ko-KR",
+            "Date": {"TYPE": "0", "FROM": start_date, "TO": end_date}
+        }
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("Status") == "200" and "Data" in data:
+            return pd.DataFrame(data["Data"])
+        else:
+            st.error(f"구매 데이터 조회 실패: {data.get('Errors', [{}])[0].get('Message', '알 수 없는 오류')}")
+            return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"API 요청 오류 (구매): {e}")
+        return None
 
+# 재고 현황 데이터 로드 함수
+@st.cache_data
+def get_inventory_balance(_zone_code, _com_code, _api_key, base_date):
+    """이카운트에서 품목별 재고 현황을 가져옵니다."""
+    endpoint = "/Inventory/GetInventoryBalance"
+    url = f"{BASE_URL}{endpoint}"
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "Request": {
+            "ZONE": _zone_code,
+            "COM_CODE": _com_code,
+            "API_CERT_KEY": _api_key,
+            "LAN_TYPE": "ko-KR",
+            "BASE_DATE": base_date
+        }
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("Status") == "200" and "Data" in data:
+            return pd.DataFrame(data["Data"])
+        else:
+            st.error(f"재고 데이터 조회 실패: {data.get('Errors', [{}])[0].get('Message', '알 수 없는 오류')}")
+            return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"API 요청 오류 (재고): {e}")
+        return None
 
 # --------------------------------------------------------------------------
-# Streamlit 대시보드 구현
+# 사이드바: 사용자 입력
 # --------------------------------------------------------------------------
-
-st.set_page_config(layout="wide")
-
-st.title("📈 경영지표 대시보드 (이카운트 ERP 연동)")
-
-# --- 사이드바: API Key 및 날짜 범위 입력 ---
 with st.sidebar:
-    st.header("⚙️ 설정")
-    api_key = st.text_input("이카운트 API Key", "YOUR_API_KEY", type="password")
+    st.header("⚙️ API 정보 입력")
+    zone_code = st.text_input("Zone Code (예: KR100)", help="이카운트 로그인 URL의 sbo.ecount.com 앞부분 (예: kr100)")
+    com_code = st.text_input("Company Code", help="이카운트 회사코드")
+    api_key = st.text_input("API 인증키", type="password", help="이카운트에서 발급받은 API 인증키")
 
-    # 기본 날짜 설정 (최근 15일)
-    end_date = pd.to_datetime("today")
-    start_date = end_date - pd.Timedelta(days=14)
+    st.header("🗓️ 조회 기간 설정")
+    today = datetime.today()
+    # 기본값: 이번 달 1일부터 오늘까지
+    default_start_date = today.replace(day=1)
+    default_end_date = today
 
     date_range = st.date_input(
         "조회 기간",
-        (start_date, end_date),
+        (default_start_date, default_end_date),
         format="YYYY-MM-DD"
     )
 
-    # 날짜 범위가 올바르게 선택되었는지 확인
     if len(date_range) == 2:
-        start_date, end_date = date_range
+        start_date_str = date_range[0].strftime("%Y%m%d")
+        end_date_str = date_range[1].strftime("%Y%m%d")
     else:
         st.warning("시작일과 종료일을 모두 선택해주세요.")
         st.stop()
+        
+    # 조회 버튼
+    search_button = st.button("📊 데이터 조회", type="primary", use_container_width=True)
 
 
-# --- 데이터 로딩 및 전처리 ---
-data = get_ecount_data(api_key, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+# --------------------------------------------------------------------------
+# 메인 대시보드
+# --------------------------------------------------------------------------
 
-if data is not None:
-    # --- 주요 지표 (KPI) 표시 ---
-    st.header("📊 주요 경영 지표")
-    total_sales = data['sales'].sum()
-    total_profit = data['profit'].sum()
-    current_inventory = data['inventory'].iloc[-1]
+if not search_button:
+    st.info("사이드바에 정보를 입력하고 '데이터 조회' 버튼을 눌러주세요.")
+else:
+    if not all([zone_code, com_code, api_key]):
+        st.error("API 정보(Zone Code, Company Code, API 인증키)를 모두 입력해주세요.")
+        st.stop()
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("총 매출", f"{total_sales:,} 원")
-    col2.metric("총 이익", f"{total_profit:,} 원")
-    col3.metric("현재고", f"{current_inventory:,} 개")
+    # 데이터 로딩
+    with st.spinner('이카운트에서 데이터를 가져오는 중입니다... 잠시만 기다려주세요.'):
+        sales_df = get_sales_data(zone_code, com_code, api_key, start_date_str, end_date_str)
+        purchase_df = get_purchase_data(zone_code, com_code, api_key, start_date_str, end_date_str)
+        inventory_df = get_inventory_balance(zone_code, com_code, api_key, end_date_str)
 
+    # 데이터 로딩 실패 시 중단
+    if sales_df is None or purchase_df is None or inventory_df is None:
+        st.warning("데이터를 일부만 가져왔거나 가져오지 못했습니다. API 정보와 권한을 확인해주세요.")
+        st.stop()
+
+    # --- 데이터 전처리 ---
+    # 날짜 형식 변환 및 숫자 형식 변환
+    for df in [sales_df, purchase_df]:
+        df['IO_DATE'] = pd.to_datetime(df['IO_DATE'], format='%Y%m%d')
+        df['PROD_AMT'] = pd.to_numeric(df['PROD_AMT'])
+    
+    inventory_df['QTY'] = pd.to_numeric(inventory_df['QTY'])
+    inventory_df['BAL_AMT'] = pd.to_numeric(inventory_df['BAL_AMT'])
+
+    # --- 1. 주요 지표 (KPI) ---
+    st.header("📌 주요 경영 지표 (KPI)")
+    
+    total_sales = sales_df['PROD_AMT'].sum()
+    total_purchase = purchase_df['PROD_AMT'].sum()
+    gross_profit = total_sales - total_purchase
+    
+    total_inventory_value = inventory_df['BAL_AMT'].sum()
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("총 매출", f"{total_sales:,.0f} 원")
+    col2.metric("총 매입", f"{total_purchase:,.0f} 원")
+    col3.metric("매출 이익", f"{gross_profit:,.0f} 원", f"{((gross_profit / total_sales * 100) if total_sales else 0):.2f}%")
+    col4.metric("재고 자산 총액", f"{total_inventory_value:,.0f} 원")
+    
     st.markdown("---")
 
-    # --- 시각화 ---
-    st.header("📈 시계열 데이터 분석")
+    # --- 2. 매출 및 매입 추이 분석 ---
+    st.header("📈 매출/매입 추이 분석")
 
-    # 매출 및 매입 추이
-    fig_sales_purchase = px.line(
-        data,
-        x='date',
-        y=['sales', 'purchase'],
-        title='매출 및 매입 추이',
-        labels={'value': '금액 (원)', 'variable': '항목', 'date': '날짜'},
-        color_discrete_map={'sales': '#1f77b4', 'purchase': '#ff7f0e'}
+    # 일별 데이터 집계
+    daily_sales = sales_df.groupby('IO_DATE')['PROD_AMT'].sum().rename('매출')
+    daily_purchase = purchase_df.groupby('IO_DATE')['PROD_AMT'].sum().rename('매입')
+    
+    trend_df = pd.concat([daily_sales, daily_purchase], axis=1).fillna(0).sort_index()
+
+    fig_trend = px.line(
+        trend_df,
+        x=trend_df.index,
+        y=['매출', '매입'],
+        title='기간 내 매출 및 매입 추이',
+        labels={'IO_DATE': '일자', 'value': '금액 (원)', 'variable': '구분'},
+        markers=True
     )
-    st.plotly_chart(fig_sales_purchase, use_container_width=True)
+    fig_trend.update_layout(legend_title_text='구분')
+    st.plotly_chart(fig_trend, use_container_width=True)
+    
+    st.markdown("---")
 
-    # 이익 및 재고 추이
+    # --- 3. 품목별 현황 분석 ---
+    st.header("📦 품목별 현황")
+    
     col1, col2 = st.columns(2)
+    
     with col1:
-        fig_profit = px.bar(
-            data,
-            x='date',
-            y='profit',
-            title='일별 이익',
-            labels={'profit': '이익 (원)', 'date': '날짜'}
+        st.subheader("📊 Top 10 판매 품목 (수량 기준)")
+        top_sales_items = sales_df.groupby(['PROD_CD', 'PROD_DES'])['QTY'].sum().nlargest(10).reset_index()
+        fig_top_sales = px.bar(
+            top_sales_items.sort_values('QTY', ascending=True),
+            x='QTY',
+            y='PROD_DES',
+            orientation='h',
+            title='Top 10 판매 품목',
+            labels={'QTY': '판매 수량', 'PROD_DES': '품목명'},
+            text='QTY'
         )
-        st.plotly_chart(fig_profit, use_container_width=True)
+        st.plotly_chart(fig_top_sales, use_container_width=True)
+        
     with col2:
-        fig_inventory = px.area(
-            data,
-            x='date',
-            y='inventory',
-            title='재고 추이',
-            labels={'inventory': '재고량 (개)', 'date': '날짜'}
+        st.subheader("在庫 Top 10 재고 품목 (수량 기준)")
+        top_inventory_items = inventory_df.nlargest(10, 'QTY')
+        fig_top_inventory = px.bar(
+            top_inventory_items.sort_values('QTY', ascending=True),
+            x='QTY',
+            y='PROD_DES',
+            orientation='h',
+            title='Top 10 재고 품목',
+            labels={'QTY': '재고 수량', 'PROD_DES': '품목명'},
+            text='QTY'
         )
-        st.plotly_chart(fig_inventory, use_container_width=True)
+        st.plotly_chart(fig_top_inventory, use_container_width=True)
+        
+    st.markdown("---")
 
-
-    # --- 원본 데이터 표시 ---
-    st.header("📄 원본 데이터")
-    st.dataframe(data.style.format({"sales": "{:,}", "purchase": "{:,}", "profit": "{:,}", "inventory": "{:,}"}))
-
-else:
-    st.info("사이드바에서 API Key와 날짜를 설정한 후 데이터를 조회해주세요.")
+    # --- 4. 원본 데이터 확인 ---
+    st.header("📄 원본 데이터 확인")
+    
+    with st.expander("판매 데이터 보기"):
+        st.dataframe(sales_df)
+    
+    with st.expander("매입 데이터 보기"):
+        st.dataframe(purchase_df)
+        
+    with st.expander("재고 데이터 보기 (조회 종료일 기준)"):
+        st.dataframe(inventory_df)
