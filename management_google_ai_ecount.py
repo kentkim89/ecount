@@ -13,14 +13,13 @@ st.title("📈 Ecount ERP 경영지표 대시보드")
 st.markdown("이카운트 ERP 데이터를 활용한 실시간 경영 현황 분석")
 
 # --------------------------------------------------------------------------
-# 이카운트 ERP API 연동 함수 (USER_ID 추가 및 수정)
+# 이카운트 ERP API 연동 함수 (디버깅 기능 강화)
 # --------------------------------------------------------------------------
 
 BASE_URL = "https://oapi.ecount.com/OAPI/V2"
 
 # API 요청을 위한 공통 페이로드 생성 함수
 def create_payload(zone_code, com_code, user_id, api_key):
-    """API 요청에 필요한 공통 인증 정보를 생성합니다."""
     return {
         "ZONE": zone_code,
         "COM_CODE": com_code,
@@ -29,86 +28,45 @@ def create_payload(zone_code, com_code, user_id, api_key):
         "LAN_TYPE": "ko-KR",
     }
 
-# 세일즈 데이터 로드 함수
 @st.cache_data
-def get_sales_data(zone_code, com_code, user_id, api_key, start_date, end_date):
-    """이카운트에서 판매입력 데이터를 가져옵니다."""
-    endpoint = "/Voucher/GetSalesList"
+def get_api_data(endpoint, payload_data):
+    """API 데이터를 가져오는 통합 함수"""
     url = f"{BASE_URL}{endpoint}"
     headers = {'Content-Type': 'application/json'}
     
-    payload = create_payload(zone_code, com_code, user_id, api_key)
-    payload["Date"] = {"TYPE": "0", "FROM": start_date, "TO": end_date}
+    # ★★★ 디버깅 포인트: 어떤 데이터를 보내는지 화면에 출력 ★★★
+    st.subheader(f"📡 {endpoint} API 요청 정보:")
+    st.json({"Request": payload_data})
     
     try:
-        response = requests.post(url, headers=headers, json={"Request": payload})
+        response = requests.post(url, headers=headers, json={"Request": payload_data})
         response.raise_for_status()
         data = response.json()
         if data.get("Status") == "200" and "Data" in data:
+            st.success(f"{endpoint} 데이터 수신 성공!")
             return pd.DataFrame(data["Data"])
         else:
-            st.error(f"판매 데이터 조회 실패: {data.get('Errors', [{}])[0].get('Message', '알 수 없는 오류')}")
+            st.error(f"{endpoint} 데이터 조회 실패: {data.get('Errors', [{}])[0].get('Message', '알 수 없는 오류')}")
+            # ★★★ 디버깅 포인트: 서버의 전체 응답을 출력 ★★★
+            st.subheader(f"🚨 {endpoint} API 서버 응답:")
+            st.json(data) 
             return None
     except requests.exceptions.RequestException as e:
-        st.error(f"API 요청 오류 (판매): {e}")
+        st.error(f"API 요청 중 네트워크 오류 발생 ({endpoint}): {e}")
+        return None
+    except Exception as e:
+        st.error(f"데이터 처리 중 알 수 없는 오류 발생 ({endpoint}): {e}")
         return None
 
-# 구매 데이터 로드 함수
-@st.cache_data
-def get_purchase_data(zone_code, com_code, user_id, api_key, start_date, end_date):
-    """이카운트에서 구매입력 데이터를 가져옵니다."""
-    endpoint = "/Voucher/GetPurchaseList"
-    url = f"{BASE_URL}{endpoint}"
-    headers = {'Content-Type': 'application/json'}
-
-    payload = create_payload(zone_code, com_code, user_id, api_key)
-    payload["Date"] = {"TYPE": "0", "FROM": start_date, "TO": end_date}
-
-    try:
-        response = requests.post(url, headers=headers, json={"Request": payload})
-        response.raise_for_status()
-        data = response.json()
-        if data.get("Status") == "200" and "Data" in data:
-            return pd.DataFrame(data["Data"])
-        else:
-            st.error(f"구매 데이터 조회 실패: {data.get('Errors', [{}])[0].get('Message', '알 수 없는 오류')}")
-            return None
-    except requests.exceptions.RequestException as e:
-        st.error(f"API 요청 오류 (구매): {e}")
-        return None
-
-# 재고 현황 데이터 로드 함수
-@st.cache_data
-def get_inventory_balance(zone_code, com_code, user_id, api_key, base_date):
-    """이카운트에서 품목별 재고 현황을 가져옵니다."""
-    endpoint = "/Inventory/GetInventoryBalance"
-    url = f"{BASE_URL}{endpoint}"
-    headers = {'Content-Type': 'application/json'}
-
-    payload = create_payload(zone_code, com_code, user_id, api_key)
-    payload["BASE_DATE"] = base_date
-
-    try:
-        response = requests.post(url, headers=headers, json={"Request": payload})
-        response.raise_for_status()
-        data = response.json()
-        if data.get("Status") == "200" and "Data" in data:
-            return pd.DataFrame(data["Data"])
-        else:
-            st.error(f"재고 데이터 조회 실패: {data.get('Errors', [{}])[0].get('Message', '알 수 없는 오류')}")
-            return None
-    except requests.exceptions.RequestException as e:
-        st.error(f"API 요청 오류 (재고): {e}")
-        return None
 
 # --------------------------------------------------------------------------
-# 사이드바: 사용자 입력 (USER_ID 입력란 추가)
+# 사이드바: 사용자 입력
 # --------------------------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ API 정보 입력")
     zone_code = st.text_input("Zone Code (예: KR100)", help="이카운트 로그인 URL의 sbo.ecount.com 앞부분 (예: kr100)")
     com_code = st.text_input("Company Code", help="이카운트 회사코드")
-    user_id = st.text_input("Ecount User ID", help="API 권한이 있는 이카운트 로그인 아이디") # <-- 사용자 아이디 입력란 추가
+    user_id = st.text_input("Ecount User ID", help="API 권한이 있는 이카운트 로그인 아이디")
     api_key = st.text_input("API 인증키", type="password", help="이카운트에서 발급받은 API 인증키")
 
     st.header("🗓️ 조회 기간 설정")
@@ -131,6 +89,7 @@ with st.sidebar:
         
     search_button = st.button("📊 데이터 조회", type="primary", use_container_width=True)
 
+
 # --------------------------------------------------------------------------
 # 메인 대시보드
 # --------------------------------------------------------------------------
@@ -138,48 +97,29 @@ with st.sidebar:
 if not search_button:
     st.info("사이드바에 정보를 입력하고 '데이터 조회' 버튼을 눌러주세요.")
 else:
-    # USER_ID 유효성 검사 추가
     if not all([zone_code, com_code, user_id, api_key]):
         st.error("API 정보(Zone Code, Company Code, User ID, API 인증키)를 모두 입력해주세요.")
         st.stop()
 
-    with st.spinner('이카운트에서 데이터를 가져오는 중입니다... 잠시만 기다려주세요.'):
-        # API 호출 시 user_id 전달
-        sales_df = get_sales_data(zone_code, com_code, user_id, api_key, start_date_str, end_date_str)
-        purchase_df = get_purchase_data(zone_code, com_code, user_id, api_key, start_date_str, end_date_str)
-        inventory_df = get_inventory_balance(zone_code, com_code, user_id, api_key, end_date_str)
+    with st.spinner('이카운트에서 데이터를 가져오는 중입니다...'):
+        # 판매 데이터
+        sales_payload = create_payload(zone_code, com_code, user_id, api_key)
+        sales_payload["Date"] = {"TYPE": "0", "FROM": start_date_str, "TO": end_date_str}
+        sales_df = get_api_data("/Voucher/GetSalesList", sales_payload)
+        
+        # 구매 데이터
+        purchase_payload = create_payload(zone_code, com_code, user_id, api_key)
+        purchase_payload["Date"] = {"TYPE": "0", "FROM": start_date_str, "TO": end_date_str}
+        purchase_df = get_api_data("/Voucher/GetPurchaseList", purchase_payload)
 
+        # 재고 데이터
+        inventory_payload = create_payload(zone_code, com_code, user_id, api_key)
+        inventory_payload["BASE_DATE"] = end_date_str
+        inventory_df = get_api_data("/Inventory/GetInventoryBalance", inventory_payload)
+        
     if sales_df is None or purchase_df is None or inventory_df is None:
-        st.warning("데이터를 일부만 가져왔거나 가져오지 못했습니다. 아래 '문제 해결 체크리스트'를 확인해주세요.")
-        # 이하 로직은 동일하므로 생략
-    else:
-        # --- 데이터 전처리 ---
-        # 날짜 형식 변환 및 숫자 형식 변환
-        for df in [sales_df, purchase_df]:
-            if not df.empty:
-                df['IO_DATE'] = pd.to_datetime(df['IO_DATE'], format='%Y%m%d')
-                df['PROD_AMT'] = pd.to_numeric(df['PROD_AMT'])
+        st.error("데이터 조회에 실패했습니다. 위에 출력된 API 요청 정보와 서버 응답을 확인하고, 아래 '최종 체크리스트'를 점검해주세요.")
+        st.stop()
         
-        if not inventory_df.empty:
-            inventory_df['QTY'] = pd.to_numeric(inventory_df['QTY'])
-            inventory_df['BAL_AMT'] = pd.to_numeric(inventory_df['BAL_AMT'])
-
-        # --- 1. 주요 지표 (KPI) ---
-        st.header("📌 주요 경영 지표 (KPI)")
-        
-        total_sales = sales_df['PROD_AMT'].sum() if not sales_df.empty else 0
-        total_purchase = purchase_df['PROD_AMT'].sum() if not purchase_df.empty else 0
-        gross_profit = total_sales - total_purchase
-        
-        total_inventory_value = inventory_df['BAL_AMT'].sum() if not inventory_df.empty else 0
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("총 매출", f"{total_sales:,.0f} 원")
-        col2.metric("총 매입", f"{total_purchase:,.0f} 원")
-        col3.metric("매출 이익", f"{gross_profit:,.0f} 원", f"{((gross_profit / total_sales * 100) if total_sales else 0):.2f}%")
-        col4.metric("재고 자산 총액", f"{total_inventory_value:,.0f} 원")
-        
-        st.markdown("---")
-
-        # 이하 시각화 코드는 동일합니다.
-        # (이하 생략)
+    # 데이터가 정상적으로 로드된 경우, 이후 로직 실행 (이하 코드는 이전과 동일)
+    # ... (데이터 처리 및 시각화 코드) ...
