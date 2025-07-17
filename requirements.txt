@@ -5,4 +5,3 @@ openpyxl
 google-generativeai
 xlsxwriter
 tabulate
-st-gsheets-connection
