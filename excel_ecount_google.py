@@ -61,9 +61,10 @@ def process_uploaded_file(uploaded_file):
             if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
         df.dropna(subset=['거래처명', '품목명(규격)', '일자-No.'], inplace=True)
-        # 오류 방지를 위해 to_datetime 전에 에러 핸들링 강화
-        df['일자'] = pd.to_datetime(df['일자-No.'].apply(lambda x: str(x).split('-').strip()), errors='coerce')
-        df.dropna(subset=['일자'], inplace=True) # 날짜 변환 실패한 행 제거
+        
+        # --- 오류 수정된 부분 ---
+        df['일자'] = pd.to_datetime(df['일자-No.'].apply(lambda x: str(x).split('-')[0].strip()), errors='coerce')
+        df.dropna(subset=['일자'], inplace=True)
         df['년월'] = df['일자'].dt.to_period('M')
 
         mask_static = df['품목명(규격)'].str.strip().isin(EXCLUDED_ITEMS)
@@ -151,7 +152,6 @@ with st.sidebar:
             unique_months = sorted(analysis_df['년월'].unique(), reverse=True)
             if len(unique_months) >= 2:
                 st.header("2. 분석할 월 선택")
-                # 월 선택 위젯에 key를 부여하여 상태 유지
                 selected_curr_month = st.selectbox("**이번달 (기준 월)**", unique_months, index=0, key='current_month')
                 selected_prev_month = st.selectbox("**지난달 (비교 월)**", unique_months, index=1, key='previous_month')
                 
@@ -179,7 +179,7 @@ if 'analysis_ready' in st.session_state and st.session_state.analysis_ready:
     curr_df = st.session_state.analysis_df[st.session_state.analysis_df['년월'] == curr_month]
     prev_df = st.session_state.analysis_df[st.session_state.analysis_df['년월'] == prev_month]
     
-    tab1, tab2 = st.tabs([" 성과 비교 대시보드", " AI 종합 분석 및 예측"])
+    tab1, tab2 = st.tabs(["📊 성과 비교 대시보드", "🤖 AI 종합 분석 및 예측"])
 
     with tab1:
         st.header(f"{curr_month} vs {prev_month} 성과 비교", anchor=False)
@@ -194,7 +194,8 @@ if 'analysis_ready' in st.session_state and st.session_state.analysis_ready:
                 '거래처 수': df_analysis['거래처명'].nunique()
             })
         
-        prev_kpi, curr_kpi = kpi_data, kpi_data
+        # --- 논리 오류 수정된 부분 ---
+        prev_kpi, curr_kpi = kpi_data[0], kpi_data[1]
         st.divider()
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("총 공급가액", f"{curr_kpi['총 공급가액']:,.0f} 원", f"{curr_kpi['총 공급가액'] - prev_kpi['총 공급가액']:,.0f} 원")
@@ -273,11 +274,10 @@ if 'analysis_ready' in st.session_state and st.session_state.analysis_ready:
         if st.button("📈 비교 분석 리포트 생성"):
             if g_model:
                 with st.spinner("고래미 AI가 두 달치 데이터를 비교 분석하여 전략을 수립하고 있습니다..."):
-                    kpi_df = pd.DataFrame([prev_kpi, curr_kpi])
+                    kpi_df = pd.DataFrame(kpi_data)
                     report = get_comparison_analysis_report(g_model, kpi_df, top_growth_cust, top_decline_cust, top_growth_prod, top_decline_prod, new_customers, lost_products)
                     st.markdown(report)
             else:
                 st.warning("AI 모델이 연결되지 않았습니다.")
 else:
-    # --- 오타 수정된 부분 ---
     st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하고, 분석할 두 개의 월을 선택하여 비교 분석을 시작하세요.")
