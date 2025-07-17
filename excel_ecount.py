@@ -104,4 +104,3 @@ if uploaded_file is not None:
     st.download_button(label="처리된 데이터 다운로드 (Excel)", data=output, file_name="processed_sales.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 else:
     st.info("엑셀 파일을 업로드하여 대시보드를 생성하세요. 데이터 형식은 제공된 예시와 유사해야 합니다.")
-```
