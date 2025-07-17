@@ -61,8 +61,10 @@ def process_uploaded_file(uploaded_file):
             if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
         df.dropna(subset=['거래처명', '품목명(규격)', '일자-No.'], inplace=True)
-        df['일자'] = pd.to_datetime(df['일자-No.'].apply(lambda x: str(x).split('-')[0].strip()))
-        df['년월'] = df['일자'].dt.to_period('M') # 분석을 위한 '년월' 컬럼 생성
+        # 오류 방지를 위해 to_datetime 전에 에러 핸들링 강화
+        df['일자'] = pd.to_datetime(df['일자-No.'].apply(lambda x: str(x).split('-').strip()), errors='coerce')
+        df.dropna(subset=['일자'], inplace=True) # 날짜 변환 실패한 행 제거
+        df['년월'] = df['일자'].dt.to_period('M')
 
         mask_static = df['품목명(규격)'].str.strip().isin(EXCLUDED_ITEMS)
         mask_pattern = df['품목명(규격)'].str.contains(EXCLUDED_KEYWORDS_PATTERN, na=False)
@@ -135,41 +137,49 @@ with st.sidebar:
     st.header("1. 데이터 업로드")
     uploaded_file = st.file_uploader("📂 판매현황 엑셀 파일을 업로드하세요.", type=["xlsx", "xls"])
     
-    st.session_state.full_df, st.session_state.analysis_df = None, None
-    st.session_state.selected_curr_month, st.session_state.selected_prev_month = None, None
+    # 세션 스테이트 초기화
+    if 'data_loaded' not in st.session_state:
+        st.session_state.data_loaded = False
 
     if uploaded_file:
         full_df, analysis_df = process_uploaded_file(uploaded_file)
         if full_df is not None:
             st.session_state.full_df = full_df
             st.session_state.analysis_df = analysis_df
+            st.session_state.data_loaded = True
             
             unique_months = sorted(analysis_df['년월'].unique(), reverse=True)
             if len(unique_months) >= 2:
                 st.header("2. 분석할 월 선택")
-                selected_curr_month = st.selectbox("**이번달 (기준 월)**", unique_months, index=0)
-                selected_prev_month = st.selectbox("**지난달 (비교 월)**", unique_months, index=1)
+                # 월 선택 위젯에 key를 부여하여 상태 유지
+                selected_curr_month = st.selectbox("**이번달 (기준 월)**", unique_months, index=0, key='current_month')
+                selected_prev_month = st.selectbox("**지난달 (비교 월)**", unique_months, index=1, key='previous_month')
                 
                 if selected_curr_month == selected_prev_month:
                     st.warning("기준 월과 비교 월은 다르게 선택해야 합니다.")
+                    st.session_state.analysis_ready = False
                 else:
-                    st.session_state.selected_curr_month = selected_curr_month
-                    st.session_state.selected_prev_month = selected_prev_month
+                    st.session_state.analysis_ready = True
                     st.success("월 선택 완료! 탭을 확인하세요.")
             else:
                 st.warning("파일에 최소 2개월 이상의 데이터가 있어야 비교 분석이 가능합니다.")
+                st.session_state.analysis_ready = False
+        else:
+            st.session_state.data_loaded = False
+            st.session_state.analysis_ready = False
+
 
 # --- 메인 대시보드 ---
-if st.session_state.selected_curr_month and st.session_state.selected_prev_month:
-    curr_month = st.session_state.selected_curr_month
-    prev_month = st.session_state.selected_prev_month
+if 'analysis_ready' in st.session_state and st.session_state.analysis_ready:
+    curr_month = st.session_state.current_month
+    prev_month = st.session_state.previous_month
 
     full_curr_df = st.session_state.full_df[st.session_state.full_df['년월'] == curr_month]
     full_prev_df = st.session_state.full_df[st.session_state.full_df['년월'] == prev_month]
     curr_df = st.session_state.analysis_df[st.session_state.analysis_df['년월'] == curr_month]
     prev_df = st.session_state.analysis_df[st.session_state.analysis_df['년월'] == prev_month]
     
-    tab1, tab2 = st.tabs(["[1] 성과 비교 대시보드", "[2] AI 종합 분석 및 예측"])
+    tab1, tab2 = st.tabs([" 성과 비교 대시보드", " AI 종합 분석 및 예측"])
 
     with tab1:
         st.header(f"{curr_month} vs {prev_month} 성과 비교", anchor=False)
@@ -184,7 +194,7 @@ if st.session_state.selected_curr_month and st.session_state.selected_prev_month
                 '거래처 수': df_analysis['거래처명'].nunique()
             })
         
-        prev_kpi, curr_kpi = kpi_data[0], kpi_data[1]
+        prev_kpi, curr_kpi = kpi_data, kpi_data
         st.divider()
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("총 공급가액", f"{curr_kpi['총 공급가액']:,.0f} 원", f"{curr_kpi['총 공급가액'] - prev_kpi['총 공급가액']:,.0f} 원")
@@ -269,4 +279,5 @@ if st.session_state.selected_curr_month and st.session_state.selected_prev_month
             else:
                 st.warning("AI 모델이 연결되지 않았습니다.")
 else:
-    st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하고, 분석할 두 개의 월을 선택하여 비교 분석을 시작하세요.")```
+    # --- 오타 수정된 부분 ---
+    st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하고, 분석할 두 개의 월을 선택하여 비교 분석을 시작하세요.")
