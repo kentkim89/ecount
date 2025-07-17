@@ -15,7 +15,6 @@ st.set_page_config(
 
 # --- 사용자 정의 영역 ---
 # 1. 특정 이름으로 된 제외 항목 리스트
-#    - 여기에 고정된 이름의 제외 항목을 추가/삭제하여 관리합니다.
 EXCLUDED_ITEMS = [
     "경영지원부 기타코드",
     "추가할인",
@@ -25,13 +24,14 @@ EXCLUDED_ITEMS = [
     "KPP 파렛트 (빨간색)",
     "KPP 파렛트 (파란색)",
     "[부재료]NO.320_80g전용_트레이_홈플러스전용_KCP",
+    # --- 요청에 따라 추가된 항목 ---
     "미니락교 20g 이엔 (세트상품)",
     "초대리 50g 주비 (세트상품)"
 ]
 
 # 2. 특정 키워드가 포함된 항목을 제외하기 위한 패턴
-#    - '|'는 OR를 의미합니다. '택배비' 또는 '운송비' 또는 '수수료' 등이 포함된 항목을 찾습니다.
 EXCLUDED_KEYWORDS_PATTERN = r'택배비|운송비|수수료|쿠폰할인|추가할인|픽업할인'
+
 
 # --- 데이터 클리닝 함수 ---
 def clean_product_name(name):
@@ -54,7 +54,7 @@ def clean_product_name(name):
     elif storage: return f"{name} {storage}"
     else: return name
 
-# --- AI 및 앱 로직 (생략 없이 전체 포함) ---
+# --- AI 및 앱 로직 (이하 전체 코드) ---
 def configure_google_ai(api_key):
     try:
         genai.configure(api_key=api_key)
@@ -182,19 +182,19 @@ if uploaded_file is not None:
         
         df = df.dropna(subset=['품목코드', '일자'])
 
-        # --- 분석 제외 항목 필터링 로직 ---
-        # 1. 고정된 이름 기준 제외
         mask_static = df['품목명(규격)'].isin(EXCLUDED_ITEMS)
-        # 2. 키워드 패턴 기준 제외
         mask_pattern = df['품목명(규격)'].str.contains(EXCLUDED_KEYWORDS_PATTERN, na=False)
-        # 두 조건을 합쳐서 제외할 전체 항목 마스크 생성
         combined_mask = mask_static | mask_pattern
         
-        # 실제 제품 분석에 사용할 데이터프레임 (제외 항목 필터링)
         analysis_df = df[~combined_mask].copy()
         
-        # 정제된 제품명 생성 (분석용 데이터프레임에만 적용)
         analysis_df['제품명'] = analysis_df['품목명(규격)'].apply(clean_product_name)
+        
+        # --- 'undefined' 항목 제거 로직 ---
+        # 거래처명이나 제품명이 비어 있는 경우 분석에서 최종 제외
+        analysis_df.dropna(subset=['거래처명'], inplace=True)
+        analysis_df = analysis_df[analysis_df['거래처명'].str.strip() != '']
+        analysis_df = analysis_df[analysis_df['제품명'].str.strip() != '']
         
         st.success("데이터 로딩 및 전처리가 완료되었습니다.")
         st.info(f"전체 {len(df)}개 거래 항목 중, 제품 분석에서 제외된 관리용 항목은 {len(df) - len(analysis_df)}개 입니다.")
@@ -208,15 +208,13 @@ if uploaded_file is not None:
 
     with tab1:
         st.header("지난달 핵심 성과 지표", anchor=False)
-        # 재무 지표는 원본 df에서 계산
         total_sales = df['합계'].sum()
         total_supply = df['공급가액'].sum()
         
-        # 운송비용 계산 (원본 df에서 '택배비', '운송비' 키워드 포함 항목 합계)
+        # 운송비용 계산 로직 (월별 이름이 바뀌어도 '택배비' 또는 '운송비' 키워드로 찾음)
         transport_mask = df['품목명(규격)'].str.contains('택배비|운송비', na=False)
         total_transport_cost = df.loc[transport_mask, '합계'].sum()
         
-        # 제품/고객 관련 지표는 analysis_df에서 계산
         total_boxes = analysis_df['박스'].sum()
         unique_customers = analysis_df['거래처명'].nunique()
 
@@ -227,7 +225,6 @@ if uploaded_file is not None:
         col3.metric("총 판매 박스", f"{total_boxes:,.0f} 개")
         col4.metric("거래처 수", f"{unique_customers} 곳")
         
-        # 운송비용을 별도 라인에 강조하여 표시
         st.metric("총 운송비용", f"{total_transport_cost:,.0f} 원", help="'택배비', '운송비'가 포함된 모든 항목의 합계입니다.")
         st.divider()
 
