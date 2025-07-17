@@ -4,7 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
 import google.generativeai as genai
-import re # 정규식 처리를 위한 라이브러리 import
+import re
 
 # --- Streamlit 페이지 설정 ---
 st.set_page_config(
@@ -15,37 +15,21 @@ st.set_page_config(
 
 # --- 데이터 클리닝 함수 ---
 def clean_product_name(name):
-    """제품명을 정제하여 '제품명 (규격) 냉동/냉장' 형태로 반환합니다."""
     if not isinstance(name, str):
         return name
-
-    # 1. '[완제품]' 등 특정 접두사 제거
     name = re.sub(r'\[완제품\]\s*', '', name).strip()
-    
-    # 2. '제품명 [규격]' 또는 '제품명(규격)' 패턴 처리
-    # 대괄호 또는 소괄호 안의 내용을 spec_full로 추출
     match = re.search(r'^(.*?)\s*\[(.*?)\]$|^(.*?)\s*\((.*?)\)$', name)
     if match:
         main_name = (match.group(1) or match.group(3) or '').strip()
         spec_full = (match.group(2) or match.group(4) or '').strip()
-
-        storage = ''
-        if '냉동' in spec_full:
-            storage = '냉동'
-        elif '냉장' in spec_full:
-            storage = '냉장'
-
-        # 규격에서 온도 관련 단어 및 불필요한 기호 제거
+        storage = '냉동' if '냉동' in spec_full else '냉장' if '냉장' in spec_full else ''
         spec = re.sub(r'냉동|냉장|\*|1ea|=|1kg', '', spec_full, flags=re.I).strip()
-        spec = re.sub(r'\s+', ' ', spec).strip() # 여러 공백을 하나로
-        
+        spec = re.sub(r'\s+', ' ', spec).strip()
         return f"{main_name} ({spec}) {storage}".strip()
-    
-    return name # 패턴에 맞지 않으면 원본 반환
+    return name
 
 # --- Google AI 설정 ---
 def configure_google_ai(api_key):
-    """Google AI 모델을 설정하고 반환합니다."""
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
@@ -54,11 +38,9 @@ def configure_google_ai(api_key):
         st.error(f"Google AI 모델 설정에 실패했습니다: {e}")
         st.stop()
 
-# --- AI 분석 함수 ---
+# --- AI 분석 함수 (생략 없이 전체 포함) ---
 def get_monthly_strategy_report(model, df):
-    """AI를 사용하여 월간 비즈니스 전략 리포트를 생성합니다."""
     if model is None: return "AI 모델이 설정되지 않았습니다."
-
     prompt = f"""
     당신은 '고래미 주식회사'의 수석 비즈니스 전략가입니다.
     아래는 방금 마감된 **지난달의 판매 실적 데이터**입니다. 이 데이터를 기반으로, **다음 달의 비즈니스 성공을 위한 실행 전략 보고서**를 작성해주세요.
@@ -67,7 +49,6 @@ def get_monthly_strategy_report(model, df):
     ```
     {df[['일자', '거래처명', '제품명', '박스', '합계']].head().to_string()}
     ```
-
     **지난달 주요 성과 지표:**
     - 총 매출: {df['합계'].sum():,.0f} 원
     - 고유 거래처 수: {df['거래처명'].nunique()} 곳
@@ -94,9 +75,7 @@ def get_monthly_strategy_report(model, df):
         return f"AI 리포트 생성 중 오류가 발생했습니다: {e}"
 
 def get_low_performer_strategy(model, low_df):
-    """판매 부진 상품에 대한 마케팅 전략을 생성합니다."""
     if model is None: return "AI 모델이 설정되지 않았습니다."
-    
     prompt = f"""
     당신은 창의적인 마케팅 전략가입니다.
     아래는 '고래미 주식회사'의 지난달 판매 실적이 저조했던 상품 리스트입니다.
@@ -105,7 +84,6 @@ def get_low_performer_strategy(model, low_df):
     ```
     {low_df.to_string(index=False)}
     ```
-
     **요청:**
     위 상품들의 재고를 소진하고 판매를 활성화하기 위한 **다음 달 마케팅 전략**을 구체적이고 창의적으로 제안해주세요. 아래 구조에 따라 답변해주세요.
 
@@ -125,9 +103,7 @@ def get_low_performer_strategy(model, low_df):
         return f"AI 전략 생성 중 오류가 발생했습니다: {e}"
 
 def get_ai_answer(model, df, question):
-    """AI를 사용하여 사용자의 자연어 질문에 답변합니다."""
-    if model is None:
-        return "AI 모델이 설정되지 않았습니다. 관리자에게 문의하세요."
+    if model is None: return "AI 모델이 설정되지 않았습니다. 관리자에게 문의하세요."
     prompt = f"""
     당신은 '고래미 주식회사'의 판매 데이터를 조회하는 친절한 AI 어시스턴트입니다.
     아래 제공된 전체 판매 데이터를 참고하여 사용자의 질문에 답변해주세요.
@@ -161,7 +137,6 @@ except KeyError:
 except Exception:
     st.sidebar.error("🚨 AI 모델 연결에 실패했습니다.")
 
-
 uploaded_file = st.file_uploader("📂 지난달 판매현황 엑셀 파일을 업로드하세요.", type=["xlsx", "xls"])
 
 if uploaded_file is not None:
@@ -178,10 +153,8 @@ if uploaded_file is not None:
         original_cols = list(df.columns)
         if len(original_cols) < len(expected_columns):
             st.warning(f"컬럼 수가 예상({len(expected_columns)})보다 적습니다({len(original_cols)}).")
-            # 컬럼 이름을 있는 만큼만 잘라서 할당
             df.columns = expected_columns[:len(original_cols)]
         else:
-            # 컬럼 수가 같거나 많으면 예상 컬럼 이름으로 전부 덮어쓰기
             df.columns = expected_columns
 
         numeric_cols = ["박스", "낱개수량", "단가", "공급가액", "부가세", "합계"]
@@ -189,12 +162,12 @@ if uploaded_file is not None:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-        df['일자'] = df['일자-No.'].apply(lambda x: str(x).split('-').strip() if pd.notnull(x) else None)
+        # *** 오류 수정된 부분 ***
+        df['일자'] = df['일자-No.'].apply(lambda x: str(x).split('-')[0].strip() if pd.notnull(x) else None)
         df['일자'] = pd.to_datetime(df['일자'], errors='coerce', format='%Y/%m/%d')
         
         df = df.dropna(subset=['품목코드', '일자'])
 
-        # *** 제품명 정제 로직 적용 ***
         df['제품명'] = df['품목명(규격)'].apply(clean_product_name)
         
         st.success("데이터 로딩 및 전처리가 완료되었습니다. 아래 탭에서 분석 결과를 확인하세요.")
@@ -243,7 +216,7 @@ if uploaded_file is not None:
         top_products = df.groupby('제품명')['합계'].sum().nlargest(20).reset_index()
 
         fig_treemap = px.treemap(top_products,
-                                 path=[px.Constant("매출 상위 20개 품목"), '제품명'], # 계층 구조 추가
+                                 path=[px.Constant("매출 상위 20개 품목"), '제품명'],
                                  values='합계',
                                  color='합계',
                                  color_continuous_scale='Blues',
