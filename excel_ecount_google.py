@@ -131,7 +131,6 @@ except KeyError:
 except Exception:
     st.sidebar.error("🚨 AI 모델 연결에 실패했습니다.")
 
-# --- 데이터 업로드 및 월 선택 (사이드바) ---
 with st.sidebar:
     st.header("1. 데이터 업로드")
     uploaded_file = st.file_uploader("📂 판매현황 엑셀 파일을 업로드하세요.", type=["xlsx", "xls"])
@@ -213,18 +212,18 @@ if st.session_state.selected_curr_month and st.session_state.selected_prev_month
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("📈 매출 급상승 업체 TOP 10", anchor=False)
-            st.dataframe(top_growth_cust.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:,.0f}'}))
+            st.dataframe(top_growth_cust.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:+,.0f}'}))
         with col2:
             st.subheader("📉 매출 급하락 업체 TOP 10", anchor=False)
-            st.dataframe(top_decline_cust.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:,.0f}'}))
+            st.dataframe(top_decline_cust.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:+,.0f}'}))
         
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("🚀 매출 급상승 상품 TOP 10", anchor=False)
-            st.dataframe(top_growth_prod.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:,.0f}'}))
+            st.dataframe(top_growth_prod.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:+,.0f}'}))
         with col2:
             st.subheader("🐌 매출 급하락 상품 TOP 10", anchor=False)
-            st.dataframe(top_decline_prod.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:,.0f}'}))
+            st.dataframe(top_decline_prod.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:+,.0f}'}))
         
         prev_cust_set = set(prev_cust_sales.index); curr_cust_set = set(curr_cust_sales.index)
         prev_prod_set = set(prev_prod_sales.index); curr_prod_set = set(curr_prod_sales.index)
@@ -246,14 +245,14 @@ if st.session_state.selected_curr_month and st.session_state.selected_prev_month
         predicted_sales = curr_kpi['총 매출'] * growth_rate
         
         prod_comparison['성장률'] = (prod_comparison[f'합계_{curr_month}'] / prod_comparison[f'합계_{prev_month}']).fillna(1)
-        prod_comparison.loc[prod_comparison['성장률'] == float('inf'), '성장률'] = 1.5 # 신규진입 상품은 50% 성장 가정
+        prod_comparison.loc[prod_comparison['성장률'] == float('inf'), '성장률'] = 1.5
         prod_comparison['다음달_예상매출'] = prod_comparison[f'합계_{curr_month}'] * prod_comparison['성장률']
         top_predicted_prod = prod_comparison.nlargest(10, '다음달_예상매출').reset_index()
 
         st.subheader("🔮 다음 달 성과 예측", anchor=False)
         col1, col2 = st.columns(2)
         with col1:
-            st.metric("다음 달 예상 총 매출", f"{predicted_sales:,.0f} 원", f"{predicted_sales - curr_kpi['총 매출']:,.0f} 원 vs {curr_month}", help=f"{prev_month} 대비 성장률 {growth_rate:.2%}를 적용한 예측치입니다.")
+            st.metric("다음 달 예상 총 매출", f"{predicted_sales:,.0f} 원", f"{predicted_sales - curr_kpi['총 매출']:+,.0f} 원 vs {curr_month.strftime('%Y-%m')}", help=f"{prev_month.strftime('%Y-%m')} 대비 성장률 {growth_rate:.2%}를 적용한 예측치입니다.")
         with col2:
             st.markdown(f"**🔥 { (curr_month + 1).strftime('%Y-%m') } 주력 판매 예상 상품 TOP 10**")
             st.dataframe(top_predicted_prod[['제품명', '다음달_예상매출']].style.format({'다음달_예상매출': '{:,.0f}'}), height=300)
@@ -267,6 +266,7 @@ if st.session_state.selected_curr_month and st.session_state.selected_prev_month
                     kpi_df = pd.DataFrame([prev_kpi, curr_kpi])
                     report = get_comparison_analysis_report(g_model, kpi_df, top_growth_cust, top_decline_cust, top_growth_prod, top_decline_prod, new_customers, lost_products)
                     st.markdown(report)
-            else: st.warning("AI 모델이 연결되지 않았습니다.")
+            else:
+                st.warning("AI 모델이 연결되지 않았습니다.")
 else:
-    st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하고, 분석할 두 개의 월을 선택하여 분석을 시작하세요.")
+    st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하고, 분석할 두 개의 월을 선택하여 비교 분석을 시작하세요.")```
