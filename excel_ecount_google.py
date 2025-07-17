@@ -49,7 +49,7 @@ def configure_google_ai(api_key):
         st.error(f"Google AI 모델 설정 실패: {e}")
         st.stop()
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def process_uploaded_file(uploaded_file):
     try:
         df = pd.read_excel(uploaded_file, sheet_name="판매현황", header=1)
@@ -64,7 +64,6 @@ def process_uploaded_file(uploaded_file):
         df.dropna(subset=['일자'], inplace=True)
         df['년월'] = df['일자'].dt.to_period('M')
         
-        # 전체 데이터(df)와 분석용 데이터(analysis_df) 분리
         mask_static = df['품목명(규격)'].str.strip().isin(EXCLUDED_ITEMS)
         mask_pattern = df['품목명(규격)'].str.contains(EXCLUDED_KEYWORDS_PATTERN, na=False)
         combined_mask = mask_static | mask_pattern
@@ -131,22 +130,22 @@ if uploaded_file:
     with st.spinner("대용량 파일을 처리하는 중입니다. 잠시만 기다려주세요..."):
         full_df, analysis_df = process_uploaded_file(uploaded_file)
     
-    if analysis_df is not None:
+    if analysis_df is not None and not analysis_df.empty:
         st.success("파일 처리 완료! 분석을 시작합니다.")
         unique_months = sorted(analysis_df['년월'].unique(), reverse=True)
         
+        tab1, tab2, tab3 = st.tabs(["[1] 장기 추세 분석", "[2] 성과 비교 분석", "[3] AI 종합 분석"])
+
+        with tab1:
+            st.header("장기 추세 분석")
+            st.info("업로드된 파일의 전체 기간에 대한 성과 추이를 확인합니다.")
+            monthly_sales = analysis_df.groupby('년월')['합계'].sum().reset_index()
+            monthly_sales['년월'] = monthly_sales['년월'].dt.to_timestamp()
+            fig = px.line(monthly_sales, x='년월', y='합계', title='전체 기간 월별 매출 추이', markers=True, template="plotly_white")
+            fig.update_layout(yaxis_title="월 총매출(원)", xaxis_title="년월")
+            st.plotly_chart(fig, use_container_width=True)
+
         if len(unique_months) >= 2:
-            tab1, tab2, tab3 = st.tabs(["[1] 장기 추세 분석", "[2] 성과 비교 분석", "[3] AI 종합 분석"])
-
-            with tab1:
-                st.header("장기 추세 분석")
-                st.info("업로드된 파일의 전체 기간에 대한 성과 추이를 확인합니다.")
-                monthly_sales = analysis_df.groupby('년월')['합계'].sum().reset_index()
-                monthly_sales['년월'] = monthly_sales['년월'].dt.to_timestamp()
-                fig = px.line(monthly_sales, x='년월', y='합계', title='전체 기간 월별 매출 추이', markers=True, template="plotly_white")
-                fig.update_layout(yaxis_title="월 총매출(원)", xaxis_title="년월")
-                st.plotly_chart(fig, use_container_width=True)
-
             with tab2:
                 st.header("성과 비교 분석")
                 st.info("비교하고 싶은 두 기간을 선택하여 성과를 분석하세요.")
@@ -160,7 +159,6 @@ if uploaded_file:
                     full_curr_df = full_df[full_df['년월'] == curr_month_select]
                     full_prev_df = full_df[full_df['년월'] == prev_month_select]
 
-                    # KPI 계산
                     kpi_data = []
                     for period, df_full_period, df_analysis_period in [(prev_month_select.strftime('%Y-%m'), full_prev_df, prev_df), (curr_month_select.strftime('%Y-%m'), full_curr_df, curr_df)]:
                         kpi_data.append({'기간': period, '총 공급가액': df_full_period['공급가액'].sum(), '총 매출': df_full_period['합계'].sum(), '총 판매 박스': df_analysis_period['박스'].sum(), '거래처 수': df_analysis_period['거래처명'].nunique()})
@@ -173,7 +171,6 @@ if uploaded_file:
                     c3.metric("총 판매 박스", f"{curr_kpi['총 판매 박스']:,.0f} 개", f"{curr_kpi['총 판매 박스'] - prev_kpi['총 판매 박스']:,.0f} 개")
                     c4.metric("거래처 수", f"{curr_kpi['거래처 수']} 곳", f"{curr_kpi['거래처 수'] - prev_kpi['거래처 수']} 곳")
 
-                    # 비교 테이블 생성
                     st.divider()
                     prev_cust_sales = prev_df.groupby('거래처명')['합계'].sum()
                     curr_cust_sales = curr_df.groupby('거래처명')['합계'].sum()
@@ -190,12 +187,19 @@ if uploaded_file:
                     top_growth_prod = prod_comparison.nlargest(10, '변동액').reset_index()
                     top_decline_prod = prod_comparison.nsmallest(10, '변동액').reset_index()
                     
+                    # --- 오류 수정된 부분 ---
+                    formatter_dict = {
+                        f'합계_{prev_month_select}': '{:,.0f}',
+                        f'합계_{curr_month_select}': '{:,.0f}',
+                        '변동액': '{:+,.0f}'
+                    }
+
                     c1, c2 = st.columns(2)
-                    with c1: st.subheader("📈 매출 급상승 업체 TOP 10"); st.dataframe(top_growth_cust.style.format(formatter="{:,.0f}"))
-                    with c2: st.subheader("📉 매출 급하락 업체 TOP 10"); st.dataframe(top_decline_cust.style.format(formatter="{:,.0f}"))
+                    with c1: st.subheader("📈 매출 급상승 업체 TOP 10"); st.dataframe(top_growth_cust.style.format(formatter_dict))
+                    with c2: st.subheader("📉 매출 급하락 업체 TOP 10"); st.dataframe(top_decline_cust.style.format(formatter_dict))
                     c1, c2 = st.columns(2)
-                    with c1: st.subheader("🚀 매출 급상승 상품 TOP 10"); st.dataframe(top_growth_prod.style.format(formatter="{:,.0f}"))
-                    with c2: st.subheader("🐌 매출 급하락 상품 TOP 10"); st.dataframe(top_decline_prod.style.format(formatter="{:,.0f}"))
+                    with c1: st.subheader("🚀 매출 급상승 상품 TOP 10"); st.dataframe(top_growth_prod.style.format(formatter_dict))
+                    with c2: st.subheader("🐌 매출 급하락 상품 TOP 10"); st.dataframe(top_decline_prod.style.format(formatter_dict))
                 else:
                     st.warning("비교할 두 기간을 다르게 선택해주세요.")
 
