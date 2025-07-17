@@ -8,27 +8,75 @@ import re
 
 # --- Streamlit 페이지 설정 ---
 st.set_page_config(
-    page_title="고래미 주식회사 월간 전략 대시보드",
+    page_title="고래미 주식회사 월간 AI 전략 대시보드",
     page_icon="🐳",
     layout="wide"
 )
 
+# --- 사용자 정의 영역 ---
+# 엑셀 원본 데이터에서 '품목명(규격)'을 기준으로 분석에서 제외할 항목들
+# 나중에 여기에 항목을 추가하거나 삭제하여 관리할 수 있습니다.
+EXCLUDED_ITEMS = [
+    "경영지원부 기타코드",
+    "추가할인",
+    "픽업할인",
+    "6월 과세 수수료",
+    "6월 쿠폰할인",
+    "6월 면세 수수료",
+    "KPP 파렛트(빨간색) (N11)",
+    "KPP 파렛트(파란색) (N12)",
+    "[부재료]NO.320_80g전용_트레이_홈플러스전용_KCP",
+    "6월 면세 택배비"
+]
+
+
 # --- 데이터 클리닝 함수 ---
 def clean_product_name(name):
+    """제품명을 정제하여 핵심 정보만 남깁니다."""
     if not isinstance(name, str):
         return name
-    name = re.sub(r'\[완제품\]\s*', '', name).strip()
-    match = re.search(r'^(.*?)\s*\[(.*?)\]$|^(.*?)\s*\((.*?)\)$', name)
-    if match:
-        main_name = (match.group(1) or match.group(3) or '').strip()
-        spec_full = (match.group(2) or match.group(4) or '').strip()
-        storage = '냉동' if '냉동' in spec_full else '냉장' if '냉장' in spec_full else ''
-        spec = re.sub(r'냉동|냉장|\*|1ea|=|1kg', '', spec_full, flags=re.I).strip()
-        spec = re.sub(r'\s+', ' ', spec).strip()
-        return f"{main_name} ({spec}) {storage}".strip()
-    return name
 
-# --- Google AI 설정 ---
+    # 1. 브랜드명, 특정 접두사 제거
+    brands_and_prefixes = r'\[완제품\]|고래미|설래담'
+    name = re.sub(brands_and_prefixes, '', name, flags=re.I).strip()
+
+    # 2. 괄호 안의 규격 정보 추출
+    spec_full = ''
+    match = re.search(r'\[(.*?)\]|\((.*?)\)', name)
+    if match:
+        spec_full = (match.group(1) or match.group(2) or '').strip()
+        # 원본 이름에서 괄호와 그 내용 제거
+        name = re.sub(r'\[.*?\]|\(.*?\)', '', name).strip()
+
+    # 3. 냉동/냉장 정보 추출
+    storage = ''
+    if '냉동' in spec_full:
+        storage = '냉동'
+    elif '냉장' in spec_full:
+        storage = '냉장'
+
+    # 4. 규격 정보에서 불필요한 단어 제거
+    spec = re.sub(r'냉동|냉장|\*|1ea|=|1kg', '', spec_full, flags=re.I).strip()
+    
+    # 5. 이름과 규격에서 특수문자(_ 등) 제거하고 공백 정리
+    name = re.sub(r'[_]', ' ', name).strip()
+    spec = re.sub(r'[_]', ' ', spec).strip()
+    
+    # 여러 공백을 하나로 합치기
+    name = re.sub(r'\s+', ' ', name).strip()
+    spec = re.sub(r'\s+', ' ', spec).strip()
+    
+    # 최종 조합
+    if spec and storage:
+        return f"{name} ({spec}) {storage}"
+    elif spec:
+        return f"{name} ({spec})"
+    elif storage:
+        return f"{name} {storage}"
+    else:
+        return name
+
+# --- AI 및 앱 로직 (이전과 동일, 생략 없이 전체 포함) ---
 def configure_google_ai(api_key):
     try:
         genai.configure(api_key=api_key)
@@ -38,7 +86,6 @@ def configure_google_ai(api_key):
         st.error(f"Google AI 모델 설정에 실패했습니다: {e}")
         st.stop()
 
-# --- AI 분석 함수 (생략 없이 전체 포함) ---
 def get_monthly_strategy_report(model, df):
     if model is None: return "AI 모델이 설정되지 않았습니다."
     prompt = f"""
@@ -143,26 +190,15 @@ if uploaded_file is not None:
     try:
         df = pd.read_excel(uploaded_file, sheet_name="판매현황", header=1)
         
-        expected_columns = [
-            "일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)",
-            "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요",
-            "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1",
-            "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"
-        ]
+        expected_columns = ["일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)", "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요", "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1", "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"]
         
-        original_cols = list(df.columns)
-        if len(original_cols) < len(expected_columns):
-            st.warning(f"컬럼 수가 예상({len(expected_columns)})보다 적습니다({len(original_cols)}).")
-            df.columns = expected_columns[:len(original_cols)]
-        else:
-            df.columns = expected_columns
+        df.columns = expected_columns[:len(df.columns)]
 
         numeric_cols = ["박스", "낱개수량", "단가", "공급가액", "부가세", "합계"]
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-        # *** 오류 수정된 부분 ***
         df['일자'] = df['일자-No.'].apply(lambda x: str(x).split('-')[0].strip() if pd.notnull(x) else None)
         df['일자'] = pd.to_datetime(df['일자'], errors='coerce', format='%Y/%m/%d')
         
@@ -170,7 +206,12 @@ if uploaded_file is not None:
 
         df['제품명'] = df['품목명(규격)'].apply(clean_product_name)
         
-        st.success("데이터 로딩 및 전처리가 완료되었습니다. 아래 탭에서 분석 결과를 확인하세요.")
+        # --- 분석용 데이터프레임 생성 (제외 항목 필터링) ---
+        # 제품 분석 시에는 제외 항목을 뺀 'analysis_df'를 사용합니다.
+        analysis_df = df[~df['품목명(규격)'].isin(EXCLUDED_ITEMS)].copy()
+        
+        st.success("데이터 로딩 및 전처리가 완료되었습니다.")
+        st.info(f"전체 {len(df)}개 거래 항목 중, 제품 분석에서 제외된 관리용 항목은 {len(df) - len(analysis_df)}개 입니다.")
 
     except Exception as e:
         st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
@@ -181,12 +222,14 @@ if uploaded_file is not None:
 
     with tab1:
         st.header("지난달 핵심 성과 지표", anchor=False)
+        # 전체 재무 지표는 원본 df에서 계산 (할인, 수수료 등 포함)
         total_sales = df['합계'].sum()
         total_supply = df['공급가액'].sum()
-        total_boxes = df['박스'].sum()
-        unique_customers = df['거래처명'].nunique()
+        total_boxes = analysis_df['박스'].sum() # 박스 수는 제품만 계산
+        unique_customers = analysis_df['거래처명'].nunique() # 고객 수도 제품 구매 기준
 
         st.divider()
+        # --- 숫자 잘림 현상 수정을 위해 st.columns 사용 ---
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("총 매출", f"{total_sales:,.0f} 원")
         col2.metric("총 공급가액", f"{total_supply:,.0f} 원")
@@ -197,6 +240,7 @@ if uploaded_file is not None:
         col1, col2 = st.columns([0.6, 0.4])
         with col1:
             st.subheader("📈 일자별 매출 추이", anchor=False)
+            # 일자별 매출은 전체 매출(할인 포함)을 보는 것이 의미 있으므로 원본 df 사용
             daily_sales = df.groupby('일자')['합계'].sum().reset_index()
             fig_line = px.line(daily_sales, x='일자', y='합계', title='일자별 총 매출', markers=True, template="plotly_white")
             fig_line.update_layout(title_x=0.5, xaxis_title=None, yaxis_title="매출액 (원)")
@@ -204,7 +248,8 @@ if uploaded_file is not None:
 
         with col2:
             st.subheader("🏢 상위 거래처 매출 (Top 10)", anchor=False)
-            top_10_customers = df.groupby('거래처명')['합계'].sum().nlargest(10).reset_index()
+            # 거래처별 매출은 analysis_df 사용 (실제 제품 구매액 기준)
+            top_10_customers = analysis_df.groupby('거래처명')['합계'].sum().nlargest(10).reset_index()
             fig_bar = px.bar(top_10_customers.sort_values('합계', ascending=True),
                              x='합계', y='거래처명', orientation='h', template="plotly_white", text='합계')
             fig_bar.update_traces(texttemplate='%{x:,.0f}원', textposition='outside')
@@ -213,13 +258,12 @@ if uploaded_file is not None:
 
         st.divider()
         st.subheader("📦 품목별 매출 분석 (Top 20)", anchor=False)
-        top_products = df.groupby('제품명')['합계'].sum().nlargest(20).reset_index()
+        # 품목별 분석은 analysis_df 사용
+        top_products = analysis_df.groupby('제품명')['합계'].sum().nlargest(20).reset_index()
 
         fig_treemap = px.treemap(top_products,
                                  path=[px.Constant("매출 상위 20개 품목"), '제품명'],
-                                 values='합계',
-                                 color='합계',
-                                 color_continuous_scale='Blues',
+                                 values='합계', color='합계', color_continuous_scale='Blues',
                                  title='매출 상위 20개 품목 비중 (트리맵)',
                                  hover_data={'합계': ':,.0f원'})
         fig_treemap.update_layout(title_x=0.5, margin = dict(t=50, l=25, r=25, b=25))
@@ -233,7 +277,8 @@ if uploaded_file is not None:
         if st.button("📈 다음 달 전략 리포트 생성", key="generate_strategy"):
             if model:
                 with st.spinner('AI가 지난달 실적을 분석하여 다음 달 전략을 수립하고 있습니다...'):
-                    report = get_monthly_strategy_report(model, df)
+                    # AI 전략 리포트는 analysis_df를 기반으로 생성
+                    report = get_monthly_strategy_report(model, analysis_df)
                     st.markdown(report)
             else:
                 st.warning("AI 모델이 연결되지 않았습니다.")
@@ -242,7 +287,8 @@ if uploaded_file is not None:
 
         st.subheader("📉 판매 부진 상품 분석 및 마케팅 전략", anchor=False)
         
-        product_sales = df.groupby('제품명')['합계'].sum().reset_index()
+        # 판매 부진 상품은 analysis_df에서 추출
+        product_sales = analysis_df.groupby('제품명')['합계'].sum().reset_index()
         low_performers = product_sales.nsmallest(10, '합계')
         
         st.dataframe(low_performers.style.format({"합계": "{:,.0f} 원"}), use_container_width=True)
@@ -258,7 +304,7 @@ if uploaded_file is not None:
 
     with tab3:
         st.header("💬 AI 어시스턴트에게 질문하기", anchor=False)
-        st.info("지난달 판매 데이터에 대해 궁금한 점을 자유롭게 질문해보세요.")
+        st.info("전체 판매 데이터(할인, 수수료 포함)에 대해 궁금한 점을 자유롭게 질문해보세요.")
         
         if "messages" not in st.session_state:
             st.session_state.messages = []
@@ -267,7 +313,7 @@ if uploaded_file is not None:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        user_question = st.chat_input("질문을 입력하세요... (예: 냉동 제품 총 매출액은 얼마야?)")
+        user_question = st.chat_input("질문을 입력하세요... (예: 6월 쿠폰할인 총액은 얼마야?)")
 
         if user_question:
             st.session_state.messages.append({"role": "user", "content": user_question})
@@ -277,6 +323,7 @@ if uploaded_file is not None:
             if model:
                 with st.spinner('AI가 답변을 찾고 있습니다...'):
                     with st.chat_message("assistant"):
+                        # 질문/답변 기능은 전체 내용을 포함하는 원본 df를 사용
                         ai_answer = get_ai_answer(model, df, user_question)
                         st.markdown(ai_answer)
                         st.session_state.messages.append({"role": "assistant", "content": ai_answer})
