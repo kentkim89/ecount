@@ -14,23 +14,14 @@ st.set_page_config(
 )
 
 # --- 사용자 정의 영역 ---
-# 1. 특정 이름으로 된 제외 항목 리스트
 EXCLUDED_ITEMS = [
-    "경영지원부 기타코드",
-    "추가할인",
-    "픽업할인",
-    "KPP 파렛트(빨간색) (N11)",
-    "KPP 파렛트(파란색) (N12)",
-    "KPP 파렛트 (빨간색)",
-    "KPP 파렛트 (파란색)",
+    "경영지원부 기타코드", "추가할인", "픽업할인",
+    "KPP 파렛트(빨간색) (N11)", "KPP 파렛트(파란색) (N12)",
+    "KPP 파렛트 (빨간색)", "KPP 파렛트 (파란색)",
     "[부재료]NO.320_80g전용_트레이_홈플러스전용_KCP",
-    "미니락교 20g 이엔 (세트상품)",
-    "초대리 50g 주비 (세트상품)"
+    "미니락교 20g 이엔 (세트상품)", "초대리 50g 주비 (세트상품)"
 ]
-
-# 2. 특정 키워드가 포함된 항목을 제외하기 위한 패턴
 EXCLUDED_KEYWORDS_PATTERN = r'택배비|운송비|수수료|쿠폰할인|추가할인|픽업할인'
-
 
 # --- 데이터 클리닝 함수 ---
 def clean_product_name(name):
@@ -53,7 +44,7 @@ def clean_product_name(name):
     elif storage: return f"{name} {storage}"
     else: return name
 
-# --- AI 및 앱 로직 (이하 전체 코드) ---
+# --- AI 및 앱 로직 ---
 def configure_google_ai(api_key):
     try:
         genai.configure(api_key=api_key)
@@ -65,33 +56,46 @@ def configure_google_ai(api_key):
 
 def get_monthly_strategy_report(model, df):
     if model is None: return "AI 모델이 설정되지 않았습니다."
+    
+    # AI에게 전달할 핵심 지표를 명확히 정의
+    total_supply = df[df['합계'] >= 0]['공급가액'].sum()
+    total_sales = df[df['합계'] >= 0]['합계'].sum()
+    unique_customers = df['거래처명'].nunique()
+    
+    # --- 전문성과 가독성을 높인 새로운 프롬프트 ---
     prompt = f"""
-    당신은 '고래미 주식회사'의 수석 비즈니스 전략가입니다.
-    아래는 방금 마감된 **지난달의 판매 실적 데이터**입니다. 이 데이터를 기반으로, **다음 달의 비즈니스 성공을 위한 실행 전략 보고서**를 작성해주세요.
+    당신은 '고래미 주식회사'의 수석 비즈니스 전략가 **'고래미 AI'** 입니다.
+    지난달 판매 데이터를 분석하여, 경영진이 다음 달의 방향을 결정할 수 있도록 명확하고 구조화된 전략 보고서를 작성해주세요.
 
-    **지난달 판매 데이터 샘플:**
-    ```
-    {df[['일자', '거래처명', '제품명', '박스', '합계']].head().to_string()}
-    ```
-    **지난달 주요 성과 지표:**
-    - 총 공급가액: {df[df['합계'] >= 0]['공급가액'].sum():,.0f} 원
-    - 총 매출: {df[df['합계'] >= 0]['합계'].sum():,.0f} 원
-    - 고유 거래처 수: {df['거래처명'].nunique()} 곳
-    - 판매 기간: {df['일자'].min().strftime('%Y-%m-%d')} ~ {df['일자'].max().strftime('%Y-%m-%d')}
+    **[중요] 아래 제공된 '지난달 핵심 성과 지표'를 반드시 그대로 사용하여 보고서를 작성하세요.**
 
-    **전략 보고서 작성 가이드라인 (다음 달을 위한 제안):**
-    1.  **지난달 성과 요약 (Executive Summary):** 지난달 실적의 핵심 성공 요인과 아쉬웠던 점을 요약해주세요.
-    2.  **다음 달 핵심 추진 전략:**
-        - **주력 제품 강화:** 지난달의 효자 상품(매출 상위 3개)의 판매를 다음 달에 더욱 극대화할 수 있는 구체적인 방안을 제시해주세요. (예: 프로모션, 연관 상품 추천)
-        - **핵심 고객 관리:** VIP 고객(매출 상위 3개 거래처) 대상의 다음 달 관계 강화 활동(예: 선공개, 특별 할인)을 제안해주세요.
-    3.  **시간대별 판매 동향 기반 전략:** 지난달의 판매 추이(예: 월말에 매출 집중)를 바탕으로 다음 달의 재고 및 마케팅 활동 타이밍을 어떻게 조절해야 할지 조언해주세요.
-    4.  **기회 및 위험 요인 관리:**
-        - **다음 달의 기회:** 데이터를 통해 포착한 새로운 기회(예: 특정 제품군의 성장세)를 어떻게 활용할지 구체적인 아이디어를 제시해주세요.
-        - **잠재적 위험:** 다음 달에 주의해야 할 위험(예: 특정 고객 이탈 가능성, 재고 부족 위험)을 예측하고 대비책을 마련해주세요.
-    5.  **[중요] 다음 달 실행 계획 (Action Items for Next Month):**
-        - 위 분석을 종합하여, 다음 달에 즉시 시작해야 할 가장 중요한 액션 아이템 3가지를 우선순위와 함께 명확하게 제시해주세요.
+    ### 지난달 핵심 성과 지표
+    - **총 공급가액:** {total_supply:,.0f} 원
+    - **총 매출:** {total_sales:,.0f} 원
+    - **거래처 수:** {unique_customers} 곳
+    - **판매 기간:** {df['일자'].min().strftime('%Y-%m-%d')} ~ {df['일자'].max().strftime('%Y-%m-%d')}
 
-    결과는 경영진이 쉽게 이해할 수 있도록 마크다운 형식의 전문적인 보고서로 작성해주세요.
+    ### 다음 달 전략 보고서
+    
+    **1. 월간 성과 요약 (Executive Summary)**
+    - 위 핵심 성과 지표를 바탕으로 지난달의 전반적인 성과를 2~3문장으로 요약해주세요.
+
+    **2. 잘한 점 (What Went Well)**
+    - **효자 상품:** 매출액 기준 상위 3개 제품을 언급하고, 이 제품들이 성공한 이유를 데이터에 기반하여 분석해주세요.
+    - **핵심 고객:** 매출액 기준 상위 3개 거래처를 언급하고, 이들과의 관계가 비즈니스에 어떤 긍정적 영향을 미쳤는지 설명해주세요.
+
+    **3. 개선할 점 (Areas for Improvement)**
+    - **성장 필요 상품:** 판매가 부진했던 하위 제품군이나 특정 카테고리를 언급하고, 이것이 전체 실적에 미친 영향을 간략히 분석해주세요.
+    - **잠재 리스크:** 특정 거래처나 제품에 대한 매출 의존도가 높다면 그 위험성을 지적하고, 고객 다변화의 필요성을 제기해주세요.
+
+    **4. 다음 달 핵심 실행 과제 (Action Items for Next Month)**
+    - 위 분석을 바탕으로, 다음 달에 즉시 실행해야 할 가장 중요한 액션 아이템 3가지를 우선순위와 함께 구체적으로 제안해주세요.
+      - 예: (1순위) **효자 상품 A 프로모션 강화:** B고객사를 대상으로 A상품 10+1 프로모션을 제안하여 매출 15% 증대 목표.
+      - 예: (2순위) **신규 고객 확보:** C지역의 유사 식당을 타겟으로 신제품 D 샘플 제공 및 초기 할인 혜택 부여.
+      - 예: (3순위) **재고 관리 최적화:** 판매 부진 상품 E의 재고 소진을 위한 묶음 할인 기획.
+
+    ---
+    *보고서는 위 구조와 형식을 반드시 준수하여, **굵은 글씨**와 글머리 기호(-)를 사용해 가독성을 높여주세요.*
     """
     try:
         response = model.generate_content(prompt)
@@ -180,10 +184,12 @@ if uploaded_file is not None:
         df['일자'] = df['일자-No.'].apply(lambda x: str(x).split('-')[0].strip() if pd.notnull(x) else None)
         df['일자'] = pd.to_datetime(df['일자'], errors='coerce', format='%Y/%m/%d')
         
-        df.dropna(subset=['품목코드', '일자'], inplace=True)
-        df.dropna(subset=['거래처명'], inplace=True) # 거래처명 없는 데이터 제거
+        df.dropna(subset=['품목코드', '일자', '거래처명', '품목명(규격)'], inplace=True)
 
-        mask_static = df['품목명(규격)'].isin(EXCLUDED_ITEMS)
+        # --- 제외 로직 강화 ---
+        # 1. 원본 품목명의 앞뒤 공백을 제거하고 비교하여 정확성 향상
+        mask_static = df['품목명(규격)'].str.strip().isin(EXCLUDED_ITEMS)
+        # 2. 키워드 패턴으로 제외
         mask_pattern = df['품목명(규격)'].str.contains(EXCLUDED_KEYWORDS_PATTERN, na=False)
         combined_mask = mask_static | mask_pattern
         
@@ -216,7 +222,7 @@ if uploaded_file is not None:
         col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("총 공급가액", f"{total_supply:,.0f} 원")
         col2.metric("총 매출", f"{total_sales:,.0f} 원", help="공급가액 + 부가세")
-        col3.metric("수출 금액", f"{total_export:,.2f} USD", help="외화금액의 합계입니다.")
+        col3.metric("수출 금액", f"{total_export:,.2f} USD", help="외화금액의 합계입니다. (USD 가정)")
         col4.metric("총 판매 박스", f"{total_boxes:,.0f} 개")
         col5.metric("거래처 수", f"{unique_customers} 곳")
         st.divider()
