@@ -4,5 +4,5 @@ plotly
 openpyxl
 google-generativeai
 xlsxwriter
-requests
 tabulate
+st-gsheets-connection
