@@ -12,42 +12,40 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- 2. ECOUNT API 연동 함수 (에러 처리 강화) ---
+# --- 2. ECOUNT API 연동 함수 (실서버 URL로 수정) ---
 
-def ecount_login(com_code, user_id, api_cert_key, zone="AA"):
-    """ECOUNT API 로그인을 하고 세션 ID를 반환합니다."""
-    url = f'https://sboapi{zone}.ecount.com/OAPI/V2/OAPILogin'
+def ecount_login(com_code, user_id, api_cert_key):
+    """ECOUNT 실서버 API 로그인을 하고 세션 ID를 반환합니다."""
+    # [수정] 실서버용 URL로 변경. zone이 필요 없습니다.
+    url = 'https://oapi.ecount.com/OAPI/V2/OAPILogin'
     data = {
         "COM_CODE": com_code, "USER_ID": user_id, "API_CERT_KEY": api_cert_key,
-        "LAN_TYPE": "ko-KR", "ZONE": zone
+        "LAN_TYPE": "ko-KR"
     }
     try:
         response = requests.post(url, json=data)
         response.raise_for_status()
         contents = response.json()
         
-        # [수정] 정상 응답인지 더 확실하게 확인
         if contents.get("Status") == "200" and "SESSION_ID" in contents.get("Data", {}).get("Datas", {}):
             return contents['Data']['Datas']['SESSION_ID'], None
         else:
-            # [개선] 불안정한 에러 구조에 대응하도록 수정
-            error_obj = contents.get("Error")
+            error_obj = contents.get("Data") # 실서버용 키 오류는 'Data' 객체에 담겨 옴
             if error_obj and isinstance(error_obj, dict):
-                error_message = error_obj.get("Message", "오류 객체에 메시지가 없습니다.")
+                error_message = error_obj.get("Message", f"알 수 없는 로그인 오류. 응답: {contents}")
             else:
-                # 응답 전체를 보여줘서 디버깅을 돕도록 함
                 error_message = f"알 수 없는 로그인 오류. 응답: {contents}"
             return None, error_message
             
     except requests.exceptions.RequestException as e:
         return None, f"API 서버 연결 실패: {e}"
     except json.JSONDecodeError:
-        # [추가] 서버가 JSON이 아닌 다른 응답(HTML 등)을 보냈을 때 대응
         return None, f"API 응답 분석 실패 (JSON 형식이 아님): {response.text}"
 
-def get_sales_data(session_id, from_date, to_date, zone="AA"):
-    """지정된 기간의 판매 데이터를 ECOUNT API로 조회합니다."""
-    url = f'https://sboapi{zone}.ecount.com/OAPI/V2/Sale/GetListSale'
+def get_sales_data(session_id, from_date, to_date):
+    """지정된 기간의 판매 데이터를 ECOUNT 실서버 API로 조회합니다."""
+    # [수정] 실서버용 URL로 변경. zone이 필요 없습니다.
+    url = 'https://oapi.ecount.com/OAPI/V2/Sale/GetListSale'
     data = {
         "SESSION_ID": session_id,
         "FROM_DATE": from_date,
@@ -61,13 +59,11 @@ def get_sales_data(session_id, from_date, to_date, zone="AA"):
         if contents.get("Status") == "200":
             return contents.get("Data", []), None
         else:
-            # [개선] 세션 만료 및 기타 에러에 대한 처리 강화
             errors = contents.get("Errors")
             if errors and isinstance(errors, list) and len(errors) > 0:
-                # 여러 에러 중 첫 번째 메시지를 우선 표시
                 first_error = errors[0]
                 if "EXP00001" in first_error.get("Code", ""):
-                    return None, "API 키(세션) 인증에 실패했습니다. API 키가 '검증' 상태인지, 사용자 권한이 충분한지 확인하세요."
+                     return None, "API 키(세션) 인증에 실패했습니다. API 키가 '검증' 상태인지, 사용자 권한이 충분한지 확인하세요."
                 error_message = first_error.get("Message", f"알 수 없는 오류. 응답: {contents}")
             else:
                 error_message = f"데이터 조회 중 오류 발생. 응답: {contents}"
@@ -79,7 +75,7 @@ def get_sales_data(session_id, from_date, to_date, zone="AA"):
         return None, f"API 응답 분석 실패 (JSON 형식이 아님): {response.text}"
 
 
-# --- 3. Streamlit UI 구성 (이하 동일) ---
+# --- 3. Streamlit UI 구성 ---
 
 with st.sidebar:
     st.header("⚙️ ECOUNT 연동 정보")
@@ -104,6 +100,7 @@ with st.sidebar:
             st.error("모든 연동 정보와 날짜를 입력해주세요.")
         else:
             with st.spinner('ECOUNT에 로그인 중...'):
+                # [수정] zone 파라미터 제거
                 session_id, error = ecount_login(com_code, user_id, api_key)
 
             if error:
@@ -114,6 +111,7 @@ with st.sidebar:
                 to_date = selected_date.strftime("%Y%m%d")
 
                 with st.spinner(f"{selected_date.strftime('%Y년 %m월 %d일')}의 판매 데이터를 가져오는 중..."):
+                    # [수정] zone 파라미터 제거
                     sales_data, error = get_sales_data(session_id, from_date, to_date)
                 
                 if error:
