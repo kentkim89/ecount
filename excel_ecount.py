@@ -63,34 +63,22 @@ def get_overall_strategy_report(model, df):
     prompt = f"""
     당신은 '고래미 주식회사'의 수석 비즈니스 전략가 **'고래미 AI'** 입니다.
     지난달 판매 데이터를 분석하여, 경영진이 다음 달의 방향을 결정할 수 있도록 명확하고 구조화된 전략 보고서를 작성해주세요.
-
-    **[중요] 아래 제공된 '지난달 핵심 성과 지표'를 반드시 그대로 사용하여 보고서를 작성하세요.**
-
     ### 지난달 핵심 성과 지표
     - **총 공급가액:** {total_supply:,.0f} 원
     - **총 매출:** {total_sales:,.0f} 원
     - **거래처 수:** {unique_customers} 곳
     - **판매 기간:** {df['일자'].min().strftime('%Y-%m-%d')} ~ {df['일자'].max().strftime('%Y-%m-%d')}
-
     ### 다음 달 전략 보고서
-    
     **1. 월간 성과 요약 (Executive Summary)**
     - 위 핵심 성과 지표를 바탕으로 지난달의 전반적인 성과를 2~3문장으로 요약해주세요.
-
     **2. 잘한 점 (What Went Well)**
     - **효자 상품:** 매출액 기준 상위 3개 제품을 언급하고, 이 제품들이 성공한 이유를 데이터에 기반하여 분석해주세요.
     - **핵심 고객:** 매출액 기준 상위 3개 거래처를 언급하고, 이들과의 관계가 비즈니스에 어떤 긍정적 영향을 미쳤는지 설명해주세요.
-
     **3. 개선할 점 (Areas for Improvement)**
     - **성장 필요 상품:** 판매가 부진했던 하위 제품군이나 특정 카테고리를 언급하고, 이것이 전체 실적에 미친 영향을 간략히 분석해주세요.
     - **잠재 리스크:** 특정 거래처나 제품에 대한 매출 의존도가 높다면 그 위험성을 지적하고, 고객 다변화의 필요성을 제기해주세요.
-
     **4. 다음 달 핵심 실행 과제 (Action Items for Next Month)**
     - 위 분석을 바탕으로, 다음 달에 즉시 실행해야 할 가장 중요한 액션 아이템 3가지를 우선순위와 함께 구체적으로 제안해주세요.
-      - 예: (1순위) **효자 상품 A 프로모션 강화:** B고객사를 대상으로 A상품 10+1 프로모션을 제안하여 매출 15% 증대 목표.
-      - 예: (2순위) **신규 고객 확보:** C지역의 유사 식당을 타겟으로 신제품 D 샘플 제공 및 초기 할인 혜택 부여.
-      - 예: (3순위) **재고 관리 최적화:** 판매 부진 상품 E의 재고 소진을 위한 묶음 할인 기획.
-
     ---
     *보고서는 위 구조와 형식을 반드시 준수하여, **굵은 글씨**와 글머리 기호(-)를 사용해 가독성을 높여주세요.*
     """
@@ -126,49 +114,37 @@ def call_naver_shopping(api_id, api_secret, keyword):
 
 def get_product_deep_dive_report(model, product_name, internal_rank, datalab_result, shopping_result):
     if model is None: return "AI 모델이 설정되지 않았습니다."
-
-    # --- AI 프롬프트 안정성 강화 ---
-    trend_data_section = "**검색량 트렌드 데이터 없음**"
-    if datalab_result and datalab_result.get('results') and datalab_result['results'][0].get('data'):
+    trend_data_section = "**검색량 트렌드 데이터 없음** (검색량이 거의 없거나, 네이버에서 제공하지 않는 키워드일 수 있습니다.)"
+    if datalab_result:
         trend_data_section = f"""- **검색량 트렌드 (최근 1년):** {json.dumps(datalab_result['results'][0]['data'], ensure_ascii=False)}
     *(데이터에서 나타나는 계절적 성수기, 비수기를 분석에 활용하세요.)*"""
-
-    shopping_data_section = "**쇼핑 검색 데이터 없음**"
-    if shopping_result and shopping_result.get('items'):
+    shopping_data_section = "**쇼핑 검색 데이터 없음** (경쟁 제품이 없거나, 검색 결과가 없는 키워드일 수 있습니다.)"
+    if shopping_result:
         shopping_data_section = f"""- **주요 경쟁 제품 (상위 5개):**
     ```
     {pd.DataFrame(shopping_result['items'])[['title', 'lprice', 'brand']].to_string()}
     ```
     *(경쟁 제품의 네이밍, 가격대를 분석에 활용하세요.)*"""
-
     prompt = f"""
     당신은 대한민국 최고의 데이터 기반 마케터 **'고래미 AI'** 입니다.
     우리의 제품인 **'{product_name}'**에 대한 **내부 판매 데이터**와 **외부 시장 데이터**를 종합하여, 심층 분석 및 마케팅 전략을 수립해주세요.
-
     ### 1. 데이터 종합 분석 (Data Synthesis)
-
     **가. 내부 성과 (Internal Performance)**
     - **판매 순위:** 우리 회사 전체 제품 중 매출 **{internal_rank}위**의 핵심 제품입니다.
-
     **나. 외부 시장 현황 (External Market - Source: Naver API)**
     {trend_data_section}
     {shopping_data_section}
-
     ### 2. '{product_name}' 심층 분석 및 전략 제안
-
     위 데이터를 바탕으로, 아래 항목에 대해 구체적인 보고서를 작성해주세요.
-
     **가. SWOT 분석**
     - **Strength (강점):** 내부 성과(예: 높은 판매 순위)를 바탕으로 한 강점은 무엇인가?
     - **Weakness (약점):** 경쟁사 대비 가격, 브랜드 인지도 등에서 약점은 무엇인가?
     - **Opportunity (기회):** 검색량 트렌드(예: 특정 시즌의 검색량 급등)에서 발견되는 기회는 무엇인가?
     - **Threat (위협):** 강력한 경쟁 제품의 존재, 비수기 등 위협 요인은 무엇인가?
-
     **나. 다음 달 마케팅 액션 플랜 (Action Plan for Next Month)**
     - **1) 타겟 고객:** 어떤 고객을 집중 공략해야 하는가?
     - **2) 핵심 메시지:** 그들에게 어떤 점을 가장 강력하게 어필해야 하는가? (예: "우리 매장 판매 1위!", "지금 가장 많이 찾는 바로 그 제품!")
     - **3) 추천 캠페인:** 위 분석을 바탕으로, 바로 실행할 수 있는 온라인 마케팅 캠페인 1가지를 구체적으로 제안해주세요.
-
     ---
     *보고서는 위 구조와 형식을 반드시 준수하여, 전문가의 시각으로 작성해주세요.*
     """
@@ -183,8 +159,7 @@ def get_ai_answer(model, df, question):
     당신은 '고래미 주식회사'의 판매 데이터를 조회하는 친절한 AI 어시스턴트입니다.
     아래 제공된 전체 판매 데이터를 참고하여 사용자의 질문에 답변해주세요.
     **데이터:**
-    ```
-    {df.to_string()}
+    ```    {df.to_string()}
     ```
     **사용자 질문:** {question}
     **답변 가이드라인:**
@@ -245,7 +220,7 @@ with st.sidebar:
                 st.session_state.analysis_df = None
                 st.session_state.full_df = None
 
-tab1, tab2, tab3, tab4 = st.tabs(["[1] 내부 성과 요약", "[2] AI 종합 전략 리포트", "[3] 제품 심층 분석 (시장 연동)", "[4. AI 어시스턴트]"])
+tab1, tab2, tab3, tab4 = st.tabs(["[1] 내부 성과 요약", "[2] AI 종합 전략 리포트", "[3] 제품 심층 분석 (시장 연동)", "[4] AI 어시스턴트"])
 
 if st.session_state.analysis_df is None:
     st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하여 분석을 시작하세요.")
@@ -316,10 +291,13 @@ else:
                     st.subheader(f"'{selected_product}' 시장 데이터 분석")
                     col1, col2 = st.columns(2)
                     
-                    # --- 오류 수정: 데이터 유효성 검사 후 차트 생성 ---
+                    # --- 오류 수정: 데이터 유효성 검사 로직 강화 ---
+                    datalab_valid = datalab_result and datalab_result.get('results') and datalab_result['results'][0]['data']
+                    shopping_valid = shopping_result and shopping_result.get('items')
+
                     with col1:
                         st.markdown("**네이버 검색량 트렌드 (1년)**")
-                        if datalab_result and datalab_result.get('results') and datalab_result['results'][0].get('data'):
+                        if datalab_valid:
                             df_datalab = pd.DataFrame(datalab_result['results'][0]['data'])
                             df_datalab['period'] = pd.to_datetime(df_datalab['period'])
                             fig_datalab = px.line(df_datalab, x='period', y='ratio', markers=True)
@@ -329,7 +307,7 @@ else:
                             st.warning(f"'{selected_product}'에 대한 네이버 검색량 트렌드 데이터를 찾을 수 없습니다.")
                     with col2:
                         st.markdown("**네이버 쇼핑 경쟁 제품 (상위 5개)**")
-                        if shopping_result and shopping_result.get('items'):
+                        if shopping_valid:
                             df_shopping = pd.DataFrame(shopping_result['items'])[['title', 'lprice', 'brand']]
                             df_shopping.rename(columns={'title': '제품명', 'lprice': '최저가(원)', 'brand': '브랜드'}, inplace=True)
                             st.dataframe(df_shopping, use_container_width=True)
@@ -338,7 +316,11 @@ else:
                     
                     st.divider()
                     st.subheader("AI 심층 분석 및 전략 제안 (by 고래미 AI)")
-                    report = get_product_deep_dive_report(g_model, selected_product, internal_rank, datalab_result, shopping_result)
+                    report = get_product_deep_dive_report(
+                        g_model, selected_product, internal_rank,
+                        datalab_result if datalab_valid else None,
+                        shopping_result if shopping_valid else None
+                    )
                     st.markdown(report)
 
     with tab4:
