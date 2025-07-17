@@ -24,7 +24,6 @@ EXCLUDED_ITEMS = [
     "KPP 파렛트 (빨간색)",
     "KPP 파렛트 (파란색)",
     "[부재료]NO.320_80g전용_트레이_홈플러스전용_KCP",
-    # --- 요청에 따라 추가된 항목 ---
     "미니락교 20g 이엔 (세트상품)",
     "초대리 50g 주비 (세트상품)"
 ]
@@ -75,7 +74,8 @@ def get_monthly_strategy_report(model, df):
     {df[['일자', '거래처명', '제품명', '박스', '합계']].head().to_string()}
     ```
     **지난달 주요 성과 지표:**
-    - 총 매출: {df['합계'].sum():,.0f} 원
+    - 총 공급가액: {df[df['합계'] >= 0]['공급가액'].sum():,.0f} 원
+    - 총 매출: {df[df['합계'] >= 0]['합계'].sum():,.0f} 원
     - 고유 거래처 수: {df['거래처명'].nunique()} 곳
     - 판매 기간: {df['일자'].min().strftime('%Y-%m-%d')} ~ {df['일자'].max().strftime('%Y-%m-%d')}
 
@@ -172,7 +172,7 @@ if uploaded_file is not None:
         expected_columns = ["일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)", "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요", "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1", "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"]
         df.columns = expected_columns[:len(df.columns)]
 
-        numeric_cols = ["박스", "낱개수량", "단가", "공급가액", "부가세", "합계"]
+        numeric_cols = ["박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계"]
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -180,7 +180,8 @@ if uploaded_file is not None:
         df['일자'] = df['일자-No.'].apply(lambda x: str(x).split('-')[0].strip() if pd.notnull(x) else None)
         df['일자'] = pd.to_datetime(df['일자'], errors='coerce', format='%Y/%m/%d')
         
-        df = df.dropna(subset=['품목코드', '일자'])
+        df.dropna(subset=['품목코드', '일자'], inplace=True)
+        df.dropna(subset=['거래처명'], inplace=True) # 거래처명 없는 데이터 제거
 
         mask_static = df['품목명(규격)'].isin(EXCLUDED_ITEMS)
         mask_pattern = df['품목명(규격)'].str.contains(EXCLUDED_KEYWORDS_PATTERN, na=False)
@@ -190,9 +191,6 @@ if uploaded_file is not None:
         
         analysis_df['제품명'] = analysis_df['품목명(규격)'].apply(clean_product_name)
         
-        # --- 'undefined' 항목 제거 로직 ---
-        # 거래처명이나 제품명이 비어 있는 경우 분석에서 최종 제외
-        analysis_df.dropna(subset=['거래처명'], inplace=True)
         analysis_df = analysis_df[analysis_df['거래처명'].str.strip() != '']
         analysis_df = analysis_df[analysis_df['제품명'].str.strip() != '']
         
@@ -208,24 +206,19 @@ if uploaded_file is not None:
 
     with tab1:
         st.header("지난달 핵심 성과 지표", anchor=False)
-        total_sales = df['합계'].sum()
         total_supply = df['공급가액'].sum()
-        
-        # 운송비용 계산 로직 (월별 이름이 바뀌어도 '택배비' 또는 '운송비' 키워드로 찾음)
-        transport_mask = df['품목명(규격)'].str.contains('택배비|운송비', na=False)
-        total_transport_cost = df.loc[transport_mask, '합계'].sum()
-        
+        total_sales = df['합계'].sum()
+        total_export = df['외화금액'].sum()
         total_boxes = analysis_df['박스'].sum()
         unique_customers = analysis_df['거래처명'].nunique()
 
         st.divider()
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("총 매출", f"{total_sales:,.0f} 원")
-        col2.metric("총 공급가액", f"{total_supply:,.0f} 원")
-        col3.metric("총 판매 박스", f"{total_boxes:,.0f} 개")
-        col4.metric("거래처 수", f"{unique_customers} 곳")
-        
-        st.metric("총 운송비용", f"{total_transport_cost:,.0f} 원", help="'택배비', '운송비'가 포함된 모든 항목의 합계입니다.")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("총 공급가액", f"{total_supply:,.0f} 원")
+        col2.metric("총 매출", f"{total_sales:,.0f} 원", help="공급가액 + 부가세")
+        col3.metric("수출 금액", f"{total_export:,.2f} USD", help="외화금액의 합계입니다.")
+        col4.metric("총 판매 박스", f"{total_boxes:,.0f} 개")
+        col5.metric("거래처 수", f"{unique_customers} 곳")
         st.divider()
 
         col1, col2 = st.columns(2)
@@ -271,9 +264,12 @@ if uploaded_file is not None:
 
         if st.button("💡 부진 상품 마케팅 전략 생성", key="generate_low_perf_strategy"):
             if model:
-                with st.spinner('AI가 부진 상품을 위한 창의적인 마케팅 전략을 구상하고 있습니다...'):
-                    strategy = get_low_performer_strategy(model, low_performers)
-                    st.markdown(strategy)
+                if not low_performers.empty:
+                    with st.spinner('AI가 부진 상품을 위한 창의적인 마케팅 전략을 구상하고 있습니다...'):
+                        strategy = get_low_performer_strategy(model, low_performers)
+                        st.markdown(strategy)
+                else:
+                    st.success("판매 부진 상품이 없습니다!")
             else:
                 st.warning("AI 모델이 연결되지 않았습니다.")
 
