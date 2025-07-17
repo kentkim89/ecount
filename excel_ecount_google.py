@@ -49,6 +49,28 @@ def configure_google_ai(api_key):
         st.error(f"Google AI 모델 설정 실패: {e}")
         st.stop()
 
+def process_dataframe(df):
+    expected_columns = ["일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)", "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요", "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1", "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"]
+    df.columns = expected_columns[:len(df.columns)]
+    numeric_cols = ["박스", "공급가액", "합계"]
+    for col in numeric_cols:
+        if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    df.dropna(subset=['거래처명', '품목명(규격)', '일자-No.'], inplace=True)
+    df['일자'] = pd.to_datetime(df['일자-No.'].astype(str).str.split('-').str[0].str.strip(), errors='coerce')
+    df.dropna(subset=['일자'], inplace=True)
+    df['년월'] = df['일자'].dt.to_period('M')
+    return df
+
+def process_analysis_dataframe(df):
+    mask_static = df['품목명(규격)'].str.strip().isin(EXCLUDED_ITEMS)
+    mask_pattern = df['품목명(규격)'].str.contains(EXCLUDED_KEYWORDS_PATTERN, na=False)
+    combined_mask = mask_static | mask_pattern
+    analysis_df = df[~combined_mask].copy()
+    analysis_df['제품명'] = analysis_df['품목명(규격)'].apply(clean_product_name)
+    analysis_df = analysis_df[analysis_df['제품명'].str.strip() != '']
+    return analysis_df
+
+
 def get_comparison_analysis_report(model, kpi_df, growth_cust, decline_cust, growth_prod, decline_prod, new_cust, lost_prod):
     if model is None: return "AI 모델이 연결되지 않았습니다."
     prompt = f"""
@@ -68,26 +90,13 @@ def get_comparison_analysis_report(model, kpi_df, growth_cust, decline_cust, gro
     try: return model.generate_content(prompt).text
     except Exception as e: return f"AI 리포트 생성 중 오류: {e}"
 
-# --- 데이터 처리 함수 ---
-def process_dataframe(df):
-    expected_columns = ["일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)", "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요", "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1", "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"]
-    df.columns = expected_columns[:len(df.columns)]
-    numeric_cols = ["박스", "공급가액", "합계"]
-    for col in numeric_cols:
-        if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    df.dropna(subset=['거래처명', '품목명(규격)', '일자-No.'], inplace=True)
-    df['일자'] = pd.to_datetime(df['일자-No.'].astype(str).str.split('-').str[0].str.strip(), errors='coerce')
-    df.dropna(subset=['일자'], inplace=True)
-    df['년월'] = df['일자'].dt.to_period('M')
-    return df
-
 # --- 앱 초기화 ---
 st.title("🐳 고래미 주식회사 AI BI 대시보드 (데이터 누적형)")
 
 # 세션 상태 초기화
 if 'db_data' not in st.session_state: st.session_state.db_data = pd.DataFrame()
-if 'new_df_to_save' not in st.session_state: st.session_state.new_df_to_save = None
 if 'upload_key' not in st.session_state: st.session_state.upload_key = 0
+if 'new_df_to_save' not in st.session_state: st.session_state.new_df_to_save = None
 
 # --- API 및 DB 연결 ---
 g_model, conn = None, None
@@ -104,15 +113,14 @@ with st.sidebar:
     st.header("데이터 관리")
     
     # 1. Google Sheets에서 현재 데이터 불러오기
-    if conn:
-        try:
-            st.session_state.db_data = conn.read(worksheet="판매현황_원본", usecols=list(range(25)), ttl=10)
-            status_df = process_dataframe(st.session_state.db_data.copy())
-            st.info(f"**현재 DB 현황:** 총 **{len(status_df)}** 건 데이터")
-            st.dataframe(status_df.groupby('년월').size().reset_index(name='데이터 건수').sort_values(by='년월', ascending=False), height=200)
-        except Exception:
-            st.warning("`판매현황_원본` 시트를 찾을 수 없습니다. 새 데이터를 업로드하여 시작하세요.")
-            st.session_state.db_data = pd.DataFrame()
+    try:
+        st.session_state.db_data = conn.read(worksheet="판매현황_원본", usecols=list(range(25)), ttl=10)
+        db_status_df = process_dataframe(st.session_state.db_data.copy())
+        st.info(f"**현재 DB 현황:** 총 **{len(db_status_df)}** 건 데이터")
+        st.dataframe(db_status_df.groupby('년월').size().reset_index(name='데이터 건수').sort_values(by='년월', ascending=False), height=200)
+    except Exception:
+        st.warning("`판매현황_원본` 시트를 찾을 수 없습니다. 새 데이터를 업로드하여 시작하세요.")
+        st.session_state.db_data = pd.DataFrame()
     
     # 2. 신규 데이터 업로드 UI
     uploaded_file = st.file_uploader(
@@ -121,6 +129,7 @@ with st.sidebar:
         key=f"uploader_{st.session_state.upload_key}"
     )
 
+    # 3. 업로드 파일 처리 및 저장 버튼 로직
     if uploaded_file:
         try:
             new_df = pd.read_excel(uploaded_file, sheet_name="판매현황", header=1)
@@ -130,43 +139,40 @@ with st.sidebar:
             if len(file_months) == 1:
                 file_month = file_months[0]
                 st.success(f"파일 검증 완료: '{file_month}' 데이터가 확인되었습니다.")
-                st.session_state.new_df_to_save = new_df
-                st.session_state.month_to_update = file_month
+                if st.button(f"✅ DB에 '{file_month}' 데이터 저장 (덮어쓰기)"):
+                    with st.spinner("Google Sheets에 데이터를 저장하는 중입니다..."):
+                        existing_data = st.session_state.get('db_data', pd.DataFrame())
+                        if not existing_data.empty:
+                            existing_data = process_dataframe(existing_data)
+                            existing_data_filtered = existing_data[existing_data['년월'] != file_month]
+                        else:
+                            existing_data_filtered = pd.DataFrame()
+                        
+                        updated_df = pd.concat([existing_data_filtered, new_df], ignore_index=True)
+                        
+                        # 원본 컬럼명 순서대로 저장
+                        expected_columns = ["일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)", "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요", "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1", "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"]
+                        # 업로드된 파일의 컬럼만 선택하여 순서 맞춤
+                        final_cols = [col for col in expected_columns if col in updated_df.columns]
+                        updated_df_final = updated_df[final_cols]
+
+                        conn.update(worksheet="판매현황_원본", data=updated_df_final)
+                        st.success(f"'{file_month}' 데이터를 성공적으로 저장했습니다!")
+                        st.session_state.upload_key += 1 # 파일 업로더 리셋
+                        st.rerun()
             else:
                 st.error("업로드 파일에 여러 월의 데이터가 섞여 있거나, 날짜 형식이 잘못되었습니다.")
-                st.session_state.new_df_to_save = None
-
-    # 3. 데이터 저장 버튼
-    if st.session_state.new_df_to_save is not None:
-        if st.button(f"✅ DB에 '{st.session_state.month_to_update}' 데이터 저장 (덮어쓰기)"):
-            with st.spinner("Google Sheets에 데이터를 저장하는 중입니다..."):
-                existing_data = st.session_state.get('db_data', pd.DataFrame())
-                if not existing_data.empty:
-                    # 기존 DB에서 해당 월 데이터 삭제
-                    existing_data = process_dataframe(existing_data)
-                    existing_data_filtered = existing_data[existing_data['년월'] != st.session_state.month_to_update]
-                else:
-                    existing_data_filtered = pd.DataFrame()
-                
-                # 원본 컬럼명으로 재구성하여 저장
-                expected_columns = ["일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)", "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요", "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1", "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"]
-                df_to_save = pd.concat([existing_data_filtered, st.session_state.new_df_to_save], ignore_index=True)
-                df_to_save_final = df_to_save[expected_columns]
-                
-                conn.update(worksheet="판매현황_원본", data=df_to_save_final)
-                st.success(f"'{st.session_state.month_to_update}' 데이터를 성공적으로 저장했습니다!")
-                
-                # 저장 후 상태 초기화 및 리런
-                st.session_state.new_df_to_save = None
-                st.session_state.upload_key += 1 # 파일 업로더 키 변경으로 위젯 리셋
-                st.rerun()
+        
+        # --- SyntaxError 해결: try 블록에 대한 except 블록 추가 ---
+        except Exception as e:
+            st.error(f"업로드 파일 처리 중 오류 발생: {e}")
 
 # --- 메인 대시보드 ---
 tab1, tab2, tab3 = st.tabs(["[1] 장기 추세 분석", "[2] 성과 비교 분석", "[3] AI 종합 분석"])
 
 if 'db_data' in st.session_state and not st.session_state.db_data.empty:
     full_df = st.session_state.db_data.copy()
-    analysis_df = process_and_analyze_data(full_df.copy())
+    analysis_df = process_analysis_dataframe(process_dataframe(full_df.copy()))
     unique_months = sorted(analysis_df['년월'].unique(), reverse=True)
 
     with tab1:
@@ -205,9 +211,7 @@ if 'db_data' in st.session_state and not st.session_state.db_data.empty:
                 c3.metric("총 판매 박스", f"{curr_kpi['총 판매 박스']:,.0f} 개", f"{curr_kpi['총 판매 박스'] - prev_kpi['총 판매 박스']:,.0f} 개")
                 c4.metric("거래처 수", f"{curr_kpi['거래처 수']} 곳", f"{curr_kpi['거래처 수'] - prev_kpi['거래처 수']} 곳")
 
-                # (이하 테이블 및 차트 로직)
                 st.divider()
-                # ... (이전 코드의 테이블 및 차트 생성 로직 복사) ...
                 prev_cust_sales = prev_df.groupby('거래처명')['합계'].sum()
                 curr_cust_sales = curr_df.groupby('거래처명')['합계'].sum()
                 cust_comparison = pd.merge(prev_cust_sales, curr_cust_sales, on='거래처명', how='outer', suffixes=(f'_{prev_month_select}', f'_{curr_month_select}')).fillna(0)
@@ -229,15 +233,16 @@ if 'db_data' in st.session_state and not st.session_state.db_data.empty:
                 c1, c2 = st.columns(2)
                 with c1: st.subheader("🚀 매출 급상승 상품 TOP 10"); st.dataframe(top_growth_prod.style.format(formatter="{:,.0f}"))
                 with c2: st.subheader("🐌 매출 급하락 상품 TOP 10"); st.dataframe(top_decline_prod.style.format(formatter="{:,.0f}"))
+            else:
+                st.warning("비교할 두 기간을 다르게 선택해주세요.")
 
         with tab3:
             st.header("AI 종합 분석")
-            if len(unique_months) >= 2:
+            if len(unique_months) >= 2 and 'kpi_data' in locals():
                 st.info("`성과 비교 분석` 탭에서 선택된 두 기간의 비교 데이터를 기반으로 AI가 종합 분석 및 전략을 제안합니다.")
                 if st.button("📈 AI 비교 분석 리포트 생성"):
                     if g_model:
                         with st.spinner("고래미 AI가 데이터를 비교 분석하여 전략을 수립하고 있습니다..."):
-                            kpi_df = pd.DataFrame(kpi_data)
                             prev_cust_set = set(prev_df['거래처명'].unique()); curr_cust_set = set(curr_df['거래처명'].unique())
                             prev_prod_set = set(prev_df['제품명'].unique()); curr_prod_set = set(curr_df['제품명'].unique())
                             new_customers = list(curr_cust_set - prev_cust_set)
@@ -251,4 +256,4 @@ if 'db_data' in st.session_state and not st.session_state.db_data.empty:
         st.warning("데이터베이스에 최소 2개월치의 데이터가 없습니다. '[1] 데이터 관리' 탭에서 데이터를 추가해주세요.")
 
 else:
-    st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하여 분석을 시작하세요.")
+    st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하여 데이터베이스를 구축하고 분석을 시작하세요.")
