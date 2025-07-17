@@ -1,14 +1,13 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from io import BytesIO
+from streamlit_gsheets import GSheetsConnection
 import google.generativeai as genai
 import re
 
 # --- Streamlit 페이지 설정 ---
 st.set_page_config(
-    page_title="고래미 주식회사 AI 비교 분석 대시보드",
+    page_title="고래미 주식회사 AI BI 대시보드",
     page_icon="🐳",
     layout="wide"
 )
@@ -51,233 +50,175 @@ def configure_google_ai(api_key):
         st.error(f"Google AI 모델 설정에 실패했습니다: {e}")
         st.stop()
 
-def process_uploaded_file(uploaded_file):
-    try:
-        df = pd.read_excel(uploaded_file, sheet_name="판매현황", header=1)
-        expected_columns = ["일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)", "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요", "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1", "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"]
-        df.columns = expected_columns[:len(df.columns)]
-        numeric_cols = ["박스", "공급가액", "합계"]
-        for col in numeric_cols:
-            if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
-        df.dropna(subset=['거래처명', '품목명(규격)', '일자-No.'], inplace=True)
-        
-        # --- 오류 수정된 부분 ---
-        df['일자'] = pd.to_datetime(df['일자-No.'].apply(lambda x: str(x).split('-')[0].strip()), errors='coerce')
-        df.dropna(subset=['일자'], inplace=True)
-        df['년월'] = df['일자'].dt.to_period('M')
-
-        mask_static = df['품목명(규격)'].str.strip().isin(EXCLUDED_ITEMS)
-        mask_pattern = df['품목명(규격)'].str.contains(EXCLUDED_KEYWORDS_PATTERN, na=False)
-        combined_mask = mask_static | mask_pattern
-        
-        analysis_df = df[~combined_mask].copy()
-        analysis_df['제품명'] = analysis_df['품목명(규격)'].apply(clean_product_name)
-        analysis_df = analysis_df[analysis_df['제품명'].str.strip() != '']
-        return df, analysis_df
-    except Exception as e:
-        st.error(f"파일 처리 중 오류: {e}")
-        return None, None
+def process_and_analyze_data(df):
+    """정제 및 분석용 데이터프레임을 생성하는 중앙 함수"""
+    df.dropna(subset=['거래처명', '품목명(규격)', '일자-No.'], inplace=True)
+    df['일자'] = pd.to_datetime(df['일자-No.'].apply(lambda x: str(x).split('-')[0].strip()), errors='coerce')
+    df.dropna(subset=['일자'], inplace=True)
+    df['년월'] = df['일자'].dt.to_period('M')
+    mask_static = df['품목명(규격)'].str.strip().isin(EXCLUDED_ITEMS)
+    mask_pattern = df['품목명(규격)'].str.contains(EXCLUDED_KEYWORDS_PATTERN, na=False)
+    combined_mask = mask_static | mask_pattern
+    analysis_df = df[~combined_mask].copy()
+    analysis_df['제품명'] = analysis_df['품목명(규격)'].apply(clean_product_name)
+    analysis_df = analysis_df[analysis_df['제품명'].str.strip() != '']
+    return analysis_df
 
 def get_comparison_analysis_report(model, kpi_df, growth_cust, decline_cust, growth_prod, decline_prod, new_cust, lost_prod):
     if model is None: return "AI 모델이 연결되지 않았습니다."
-    
     prompt = f"""
     당신은 '고래미 주식회사'의 수석 데이터 분석가 **'고래미 AI'** 입니다.
     아래 제공된 두 기간의 판매 실적 비교 데이터를 분석하여, 경영진을 위한 실행 중심의 보고서를 작성해주세요.
-
     ### 1. 주요 성과 비교 (KPI Summary)
     {kpi_df.to_markdown(index=False)}
-
     ### 2. 주요 변동 사항 분석 (Key Changes Analysis)
-    **가. 거래처 동향**
-    - **매출 급상승 TOP3:** {', '.join(growth_cust.head(3)['거래처명'])}
-    - **매출 급하락 TOP3:** {', '.join(decline_cust.head(3)['거래처명'])}
-    - **신규 거래처 수:** {len(new_cust)} 곳
-
-    **나. 제품 동향**
-    - **매출 급상승 TOP3:** {', '.join(growth_prod.head(3)['제품명'])}
-    - **매출 급하락 TOP3:** {', '.join(decline_prod.head(3)['제품명'])}
-    - **판매 중단(이탈) 상품 수:** {len(lost_prod)} 종
-
+    **가. 거래처 동향:** 매출 급상승 TOP3: {', '.join(growth_cust.head(3)['거래처명'])}, 매출 급하락 TOP3: {', '.join(decline_cust.head(3)['거래처명'])}, 신규 거래처 수: {len(new_cust)} 곳
+    **나. 제품 동향:** 매출 급상승 TOP3: {', '.join(growth_prod.head(3)['제품명'])}, 매출 급하락 TOP3: {', '.join(decline_prod.head(3)['제품명'])}, 판매 중단 상품 수: {len(lost_prod)} 종
     ### 3. 종합 분석 및 다음 달 전략 제안
-    위 데이터를 바탕으로 아래 질문에 대해 심층적으로 답변해주세요.
-
-    **가. 무엇이 이런 변화를 만들었는가? (Root Cause Analysis)**
-    - 매출이 **상승**했다면, 어떤 업체와 제품이 성장을 주도했나요? 그 이유는 무엇이라고 추측하나요?
-    - 매출이 **하락**했다면, 어떤 업체와 제품의 부진이 가장 큰 영향을 미쳤나요?
-    - 신규 거래처의 발생과 기존 거래처의 매출 하락 사이에 연관성이 있나요?
-
-    **나. 그래서, 우리는 무엇을 해야 하는가? (Actionable Recommendations)**
-    - **(집중 관리)** 매출이 급상승한 거래처와 제품의 성장세를 이어가기 위해 다음 달에 어떤 활동을 해야 할까요? (예: 프로모션 연장, 물량 확대 제안)
-    - **(위험 관리)** 매출이 급하락한 거래처와 제품에 대해서는 어떤 조치를 취해야 할까요? (예: 해피콜, 원인 파악, 재고 소진 계획)
-    - **(기회 포착)** 신규 거래처를 충성 고객으로 만들기 위한 전략과, 이탈 상품의 재판매 또는 단종 여부 결정에 대한 당신의 의견을 제시해주세요.
-
+    **가. 무엇이 이런 변화를 만들었는가? (Root Cause Analysis):** 매출이 **상승**했다면, 어떤 업체와 제품이 성장을 주도했나요? 그 이유는 무엇이라고 추측하나요? 매출이 **하락**했다면, 어떤 업체와 제품의 부진이 가장 큰 영향을 미쳤나요?
+    **나. 그래서, 우리는 무엇을 해야 하는가? (Actionable Recommendations):** **(집중 관리)** 성장세를 이어가기 위한 활동은? **(위험 관리)** 부진 항목에 대한 조치는? **(기회 포착)** 신규 거래처를 충성 고객으로 만들 전략은?
     ---
     *보고서는 위 구조와 형식을 반드시 준수하여, 전문가의 시각으로 작성해주세요.*
     """
     try:
         response = model.generate_content(prompt)
         return response.text
-    except Exception as e:
-        return f"AI 리포트 생성 중 오류: {e}"
+    except Exception as e: return f"AI 리포트 생성 중 오류: {e}"
 
 # --- Streamlit 앱 메인 로직 ---
-st.title("🐳 고래미 주식회사 AI 비교 분석 대시보드")
+st.title("🐳 고래미 주식회사 AI BI 대시보드 (데이터 누적형)")
 
 g_model = None
+conn = None
 try:
     g_model = configure_google_ai(st.secrets["GOOGLE_API_KEY"])
-    st.sidebar.success("✅ AI 모델이 성공적으로 연결되었습니다.")
-except KeyError:
-    st.sidebar.error("⚠️ GOOGLE_API_KEY가 없습니다. Secrets에 추가해주세요.")
-except Exception:
-    st.sidebar.error("🚨 AI 모델 연결에 실패했습니다.")
+    conn = st.connection("g-sheets-connection", type=GSheetsConnection)
+    st.sidebar.success("✅ Google AI & Sheets API가 연결되었습니다.")
+except Exception as e:
+    st.sidebar.error(f"🚨 API 연결 실패: Secrets 설정을 확인하세요. ({e})")
 
+# --- 데이터 관리 (사이드바) ---
 with st.sidebar:
-    st.header("1. 데이터 업로드")
-    uploaded_file = st.file_uploader("📂 판매현황 엑셀 파일을 업로드하세요.", type=["xlsx", "xls"])
+    st.header("데이터 관리")
     
-    # 세션 스테이트 초기화
-    if 'data_loaded' not in st.session_state:
-        st.session_state.data_loaded = False
-
-    if uploaded_file:
-        full_df, analysis_df = process_uploaded_file(uploaded_file)
-        if full_df is not None:
-            st.session_state.full_df = full_df
-            st.session_state.analysis_df = analysis_df
-            st.session_state.data_loaded = True
-            
-            unique_months = sorted(analysis_df['년월'].unique(), reverse=True)
-            if len(unique_months) >= 2:
-                st.header("2. 분석할 월 선택")
-                selected_curr_month = st.selectbox("**이번달 (기준 월)**", unique_months, index=0, key='current_month')
-                selected_prev_month = st.selectbox("**지난달 (비교 월)**", unique_months, index=1, key='previous_month')
-                
-                if selected_curr_month == selected_prev_month:
-                    st.warning("기준 월과 비교 월은 다르게 선택해야 합니다.")
-                    st.session_state.analysis_ready = False
-                else:
-                    st.session_state.analysis_ready = True
-                    st.success("월 선택 완료! 탭을 확인하세요.")
-            else:
-                st.warning("파일에 최소 2개월 이상의 데이터가 있어야 비교 분석이 가능합니다.")
-                st.session_state.analysis_ready = False
+    # 1. 데이터 로드 및 현황 표시
+    if conn:
+        try:
+            existing_data = conn.read(worksheet="판매현황_원본", usecols=list(range(25)), ttl="10s")
+            existing_data.columns = ["일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)", "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요", "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1", "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"]
+            existing_data['년월'] = pd.to_datetime(existing_data['일자-No.'].astype(str).str.split('-').str[0], errors='coerce').dt.to_period('M')
+            st.info(f"**현재 저장된 데이터:**\n- 총 **{len(existing_data)}** 건\n- 기간: **{existing_data['년월'].min()} ~ {existing_data['년월'].max()}**")
+            st.session_state.db_data = existing_data
+        except Exception:
+            st.warning("`판매현황_원본` 시트를 찾을 수 없습니다. 새 데이터를 업로드하여 시작하세요.")
+            st.session_state.db_data = pd.DataFrame()
+    
+    # 2. 신규 데이터 업로드
+    uploaded_file = st.file_uploader("📂 **신규 월별 데이터**를 업로드하여 추가/수정하세요.", type=["xlsx", "xls"])
+    if uploaded_file and conn:
+        new_df = pd.read_excel(uploaded_file, sheet_name="판매현황", header=1)
+        new_df.columns = st.session_state.db_data.columns[:len(new_df.columns)] if not st.session_state.db_data.empty else new_df.columns
+        new_df['년월'] = pd.to_datetime(new_df['일자-No.'].astype(str).str.split('-').str[0], errors='coerce').dt.to_period('M')
+        
+        updated_month = new_df['년월'].unique()[0]
+        
+        if updated_month in st.session_state.db_data['년월'].unique():
+            if st.button(f"덮어쓰기: {updated_month} 데이터 업데이트"):
+                existing_data_filtered = st.session_state.db_data[st.session_state.db_data['년월'] != updated_month]
+                updated_df = pd.concat([existing_data_filtered, new_df], ignore_index=True)
+                conn.update(worksheet="판매현황_원본", data=updated_df)
+                st.success(f"{updated_month} 데이터를 성공적으로 업데이트했습니다!")
+                st.rerun()
         else:
-            st.session_state.data_loaded = False
-            st.session_state.analysis_ready = False
-
+            if st.button(f"추가하기: {updated_month} 데이터 저장"):
+                updated_df = pd.concat([st.session_state.db_data, new_df], ignore_index=True)
+                conn.update(worksheet="판매현황_원본", data=updated_df)
+                st.success(f"{updated_month} 데이터를 성공적으로 추가했습니다!")
+                st.rerun()
 
 # --- 메인 대시보드 ---
-if 'analysis_ready' in st.session_state and st.session_state.analysis_ready:
-    curr_month = st.session_state.current_month
-    prev_month = st.session_state.previous_month
-
-    full_curr_df = st.session_state.full_df[st.session_state.full_df['년월'] == curr_month]
-    full_prev_df = st.session_state.full_df[st.session_state.full_df['년월'] == prev_month]
-    curr_df = st.session_state.analysis_df[st.session_state.analysis_df['년월'] == curr_month]
-    prev_df = st.session_state.analysis_df[st.session_state.analysis_df['년월'] == prev_month]
+if 'db_data' in st.session_state and not st.session_state.db_data.empty:
+    full_df = st.session_state.db_data
+    analysis_df = process_and_analyze_data(full_df.copy())
     
-    tab1, tab2 = st.tabs(["📊 성과 비교 대시보드", "🤖 AI 종합 분석 및 예측"])
+    unique_months = sorted(analysis_df['년월'].unique(), reverse=True)
+    
+    if len(unique_months) >= 2:
+        st.header("기간 선택")
+        c1, c2 = st.columns(2)
+        selected_curr_month = c1.selectbox("**이번달 (기준 월)**", unique_months, index=0, key='current_month')
+        selected_prev_month = c2.selectbox("**지난달 (비교 월)**", unique_months, index=1, key='previous_month')
 
-    with tab1:
-        st.header(f"{curr_month} vs {prev_month} 성과 비교", anchor=False)
-        
-        kpi_data = []
-        for period, df_full, df_analysis in [(prev_month.strftime('%Y-%m'), full_prev_df, prev_df), (curr_month.strftime('%Y-%m'), full_curr_df, curr_df)]:
-            kpi_data.append({
-                '기간': period,
-                '총 공급가액': df_full['공급가액'].sum(),
-                '총 매출': df_full['합계'].sum(),
-                '총 판매 박스': df_analysis['박스'].sum(),
-                '거래처 수': df_analysis['거래처명'].nunique()
-            })
-        
-        # --- 논리 오류 수정된 부분 ---
-        prev_kpi, curr_kpi = kpi_data[0], kpi_data[1]
-        st.divider()
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("총 공급가액", f"{curr_kpi['총 공급가액']:,.0f} 원", f"{curr_kpi['총 공급가액'] - prev_kpi['총 공급가액']:,.0f} 원")
-        col2.metric("총 매출", f"{curr_kpi['총 매출']:,.0f} 원", f"{curr_kpi['총 매출'] - prev_kpi['총 매출']:,.0f} 원")
-        col3.metric("총 판매 박스", f"{curr_kpi['총 판매 박스']:,.0f} 개", f"{curr_kpi['총 판매 박스'] - prev_kpi['총 판매 박스']:,.0f} 개")
-        col4.metric("거래처 수", f"{curr_kpi['거래처 수']} 곳", f"{curr_kpi['거래처 수'] - prev_kpi['거래처 수']} 곳")
-        st.divider()
+        if selected_curr_month != selected_prev_month:
+            curr_df = analysis_df[analysis_df['년월'] == selected_curr_month]
+            prev_df = analysis_df[analysis_df['년월'] == selected_prev_month]
+            full_curr_df = full_df[full_df['년월'] == selected_curr_month]
+            full_prev_df = full_df[full_df['년월'] == selected_prev_month]
 
-        prev_cust_sales = prev_df.groupby('거래처명')['합계'].sum()
-        curr_cust_sales = curr_df.groupby('거래처명')['합계'].sum()
-        prev_prod_sales = prev_df.groupby('제품명')['합계'].sum()
-        curr_prod_sales = curr_df.groupby('제품명')['합계'].sum()
+            tab1, tab2, tab3 = st.tabs(["📊 성과 비교 대시보드", "📈 장기 추세 분석", "🤖 AI 종합 분석"])
 
-        cust_comparison = pd.merge(prev_cust_sales, curr_cust_sales, on='거래처명', how='outer', suffixes=(f'_{prev_month}', f'_{curr_month}')).fillna(0)
-        cust_comparison['변동액'] = cust_comparison[f'합계_{curr_month}'] - cust_comparison[f'합계_{prev_month}']
-        
-        prod_comparison = pd.merge(prev_prod_sales, curr_prod_sales, on='제품명', how='outer', suffixes=(f'_{prev_month}', f'_{curr_month}')).fillna(0)
-        prod_comparison['변동액'] = prod_comparison[f'합계_{curr_month}'] - prod_comparison[f'합계_{prev_month}']
+            with tab1:
+                st.header(f"{selected_curr_month} vs {selected_prev_month} 성과 비교", anchor=False)
+                kpi_data = []
+                for period, df_full, df_analysis in [(selected_prev_month.strftime('%Y-%m'), full_prev_df, prev_df), (selected_curr_month.strftime('%Y-%m'), full_curr_df, curr_df)]:
+                    kpi_data.append({'기간': period, '총 공급가액': df_full['공급가액'].sum(), '총 매출': df_full['합계'].sum(), '총 판매 박스': df_analysis['박스'].sum(), '거래처 수': df_analysis['거래처명'].nunique()})
+                prev_kpi, curr_kpi = kpi_data[0], kpi_data[1]
+                
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("총 공급가액", f"{curr_kpi['총 공급가액']:,.0f} 원", f"{curr_kpi['총 공급가액'] - prev_kpi['총 공급가액']:,.0f} 원")
+                c2.metric("총 매출", f"{curr_kpi['총 매출']:,.0f} 원", f"{curr_kpi['총 매출'] - prev_kpi['총 매출']:,.0f} 원")
+                c3.metric("총 판매 박스", f"{curr_kpi['총 판매 박스']:,.0f} 개", f"{curr_kpi['총 판매 박스'] - prev_kpi['총 판매 박스']:,.0f} 개")
+                c4.metric("거래처 수", f"{curr_kpi['거래처 수']} 곳", f"{curr_kpi['거래처 수'] - prev_kpi['거래처 수']} 곳")
+                
+                # (이하 비교 분석 테이블 및 차트 로직은 이전과 동일)
+                prev_cust_sales = prev_df.groupby('거래처명')['합계'].sum()
+                curr_cust_sales = curr_df.groupby('거래처명')['합계'].sum()
+                cust_comparison = pd.merge(prev_cust_sales, curr_cust_sales, on='거래처명', how='outer', suffixes=(f'_{selected_prev_month}', f'_{selected_curr_month}')).fillna(0)
+                cust_comparison['변동액'] = cust_comparison[f'합계_{selected_curr_month}'] - cust_comparison[f'합계_{selected_prev_month}']
+                
+                prev_prod_sales = prev_df.groupby('제품명')['합계'].sum()
+                curr_prod_sales = curr_df.groupby('제품명')['합계'].sum()
+                prod_comparison = pd.merge(prev_prod_sales, curr_prod_sales, on='제품명', how='outer', suffixes=(f'_{selected_prev_month}', f'_{selected_curr_month}')).fillna(0)
+                prod_comparison['변동액'] = prod_comparison[f'합계_{selected_curr_month}'] - prod_comparison[f'합계_{selected_prev_month}']
+                
+                top_growth_cust = cust_comparison.nlargest(10, '변동액').reset_index()
+                top_decline_cust = cust_comparison.nsmallest(10, '변동액').reset_index()
+                top_growth_prod = prod_comparison.nlargest(10, '변동액').reset_index()
+                top_decline_prod = prod_comparison.nsmallest(10, '변동액').reset_index()
+                
+                st.divider()
+                c1, c2 = st.columns(2)
+                with c1: st.subheader("📈 매출 급상승 업체 TOP 10"); st.dataframe(top_growth_cust)
+                with c2: st.subheader("📉 매출 급하락 업체 TOP 10"); st.dataframe(top_decline_cust)
+                c1, c2 = st.columns(2)
+                with c1: st.subheader("🚀 매출 급상승 상품 TOP 10"); st.dataframe(top_growth_prod)
+                with c2: st.subheader("🐌 매출 급하락 상품 TOP 10"); st.dataframe(top_decline_prod)
 
-        top_growth_cust = cust_comparison.nlargest(10, '변동액').reset_index()
-        top_decline_cust = cust_comparison.nsmallest(10, '변동액').reset_index()
-        top_growth_prod = prod_comparison.nlargest(10, '변동액').reset_index()
-        top_decline_prod = prod_comparison.nsmallest(10, '변동액').reset_index()
+            with tab2:
+                st.header("장기 추세 분석", anchor=False)
+                monthly_sales = analysis_df.groupby('년월')['합계'].sum().reset_index()
+                monthly_sales['년월'] = monthly_sales['년월'].dt.to_timestamp()
+                fig = px.line(monthly_sales, x='년월', y='합계', title='전체 기간 월별 매출 추이', markers=True)
+                fig.update_layout(yaxis_title="월 총매출(원)", xaxis_title="년월")
+                st.plotly_chart(fig, use_container_width=True)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("📈 매출 급상승 업체 TOP 10", anchor=False)
-            st.dataframe(top_growth_cust.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:+,.0f}'}))
-        with col2:
-            st.subheader("📉 매출 급하락 업체 TOP 10", anchor=False)
-            st.dataframe(top_decline_cust.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:+,.0f}'}))
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("🚀 매출 급상승 상품 TOP 10", anchor=False)
-            st.dataframe(top_growth_prod.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:+,.0f}'}))
-        with col2:
-            st.subheader("🐌 매출 급하락 상품 TOP 10", anchor=False)
-            st.dataframe(top_decline_prod.style.format({f'합계_{prev_month}': '{:,.0f}', f'합계_{curr_month}': '{:,.0f}', '변동액': '{:+,.0f}'}))
-        
-        prev_cust_set = set(prev_cust_sales.index); curr_cust_set = set(curr_cust_sales.index)
-        prev_prod_set = set(prev_prod_sales.index); curr_prod_set = set(curr_prod_sales.index)
-        new_customers = list(curr_cust_set - prev_cust_set)
-        lost_products = list(prev_prod_set - curr_prod_set)
+            with tab3:
+                st.header("AI 종합 분석 리포트", anchor=False)
+                if st.button("📈 비교 분석 기반 AI 리포트 생성"):
+                    if g_model:
+                        with st.spinner("고래미 AI가 선택된 두 달치 데이터를 비교 분석하여 전략을 수립하고 있습니다..."):
+                            kpi_df = pd.DataFrame(kpi_data)
+                            prev_cust_set = set(prev_cust_sales.index); curr_cust_set = set(curr_cust_sales.index)
+                            prev_prod_set = set(prev_prod_sales.index); curr_prod_set = set(curr_prod_sales.index)
+                            new_customers = list(curr_cust_set - prev_cust_set)
+                            lost_products = list(prev_prod_set - curr_prod_set)
+                            report = get_comparison_analysis_report(g_model, kpi_df, top_growth_cust, top_decline_cust, top_growth_prod, top_decline_prod, new_customers, lost_products)
+                            st.markdown(report)
+                    else: st.warning("AI 모델이 연결되지 않았습니다.")
 
-        st.divider()
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("✨ 신규 거래처", anchor=False); st.dataframe(pd.DataFrame(new_customers, columns=["거래처명"]), height=200)
-        with col2:
-            st.subheader("👋 판매 중단(이탈) 상품", anchor=False); st.dataframe(pd.DataFrame(lost_products, columns=["제품명"]), height=200)
-
-    with tab2:
-        st.header(f"AI 종합 분석 및 { (curr_month + 1).strftime('%Y-%m') } 예측", anchor=False)
-        st.info("지난 두 달간의 데이터를 기반으로 다음 달의 성과를 예측하고, AI가 종합적인 전략을 제시합니다.")
-        
-        growth_rate = (curr_kpi['총 매출'] / prev_kpi['총 매출']) if prev_kpi['총 매출'] > 0 else 1
-        predicted_sales = curr_kpi['총 매출'] * growth_rate
-        
-        prod_comparison['성장률'] = (prod_comparison[f'합계_{curr_month}'] / prod_comparison[f'합계_{prev_month}']).fillna(1)
-        prod_comparison.loc[prod_comparison['성장률'] == float('inf'), '성장률'] = 1.5
-        prod_comparison['다음달_예상매출'] = prod_comparison[f'합계_{curr_month}'] * prod_comparison['성장률']
-        top_predicted_prod = prod_comparison.nlargest(10, '다음달_예상매출').reset_index()
-
-        st.subheader("🔮 다음 달 성과 예측", anchor=False)
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("다음 달 예상 총 매출", f"{predicted_sales:,.0f} 원", f"{predicted_sales - curr_kpi['총 매출']:+,.0f} 원 vs {curr_month.strftime('%Y-%m')}", help=f"{prev_month.strftime('%Y-%m')} 대비 성장률 {growth_rate:.2%}를 적용한 예측치입니다.")
-        with col2:
-            st.markdown(f"**🔥 { (curr_month + 1).strftime('%Y-%m') } 주력 판매 예상 상품 TOP 10**")
-            st.dataframe(top_predicted_prod[['제품명', '다음달_예상매출']].style.format({'다음달_예상매출': '{:,.0f}'}), height=300)
-
-        st.divider()
-        st.subheader("🤖 AI 종합 분석 리포트 (by 고래미 AI)", anchor=False)
-        
-        if st.button("📈 비교 분석 리포트 생성"):
-            if g_model:
-                with st.spinner("고래미 AI가 두 달치 데이터를 비교 분석하여 전략을 수립하고 있습니다..."):
-                    kpi_df = pd.DataFrame(kpi_data)
-                    report = get_comparison_analysis_report(g_model, kpi_df, top_growth_cust, top_decline_cust, top_growth_prod, top_decline_prod, new_customers, lost_products)
-                    st.markdown(report)
-            else:
-                st.warning("AI 모델이 연결되지 않았습니다.")
+        else:
+            st.error("기준 월과 비교 월은 다르게 선택해야 합니다.")
+    else:
+        st.warning("저장된 데이터가 2개월 미만입니다. 데이터를 더 추가하여 비교 분석을 활성화하세요.")
 else:
-    st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하고, 분석할 두 개의 월을 선택하여 비교 분석을 시작하세요.")
+    st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하여 분석을 시작하세요.")```
