@@ -21,21 +21,23 @@ def clean_product_name(name):
 
     # 1. '[완제품]' 등 특정 접두사 제거
     name = re.sub(r'\[완제품\]\s*', '', name).strip()
-
-    # 2. '제품명 [규격 냉동/냉장]' 패턴 파싱
-    match = re.search(r'^(.*?)\s*\[(.*?)]$|\((.*?)\)$', name)
+    
+    # 2. '제품명 [규격]' 또는 '제품명(규격)' 패턴 처리
+    # 대괄호 또는 소괄호 안의 내용을 spec_full로 추출
+    match = re.search(r'^(.*?)\s*\[(.*?)\]$|^(.*?)\s*\((.*?)\)$', name)
     if match:
-        main_name = match.group(1).strip() if match.group(1) else ''
-        spec_full = match.group(2).strip() if match.group(2) else ''
-        
+        main_name = (match.group(1) or match.group(3) or '').strip()
+        spec_full = (match.group(2) or match.group(4) or '').strip()
+
         storage = ''
         if '냉동' in spec_full:
             storage = '냉동'
         elif '냉장' in spec_full:
             storage = '냉장'
 
-        # 규격에서 '냉동', '냉장' 단어 제거
-        spec = spec_full.replace('냉동', '').replace('냉장', '').strip()
+        # 규격에서 온도 관련 단어 및 불필요한 기호 제거
+        spec = re.sub(r'냉동|냉장|\*|1ea|=|1kg', '', spec_full, flags=re.I).strip()
+        spec = re.sub(r'\s+', ' ', spec).strip() # 여러 공백을 하나로
         
         return f"{main_name} ({spec}) {storage}".strip()
     
@@ -63,7 +65,7 @@ def get_monthly_strategy_report(model, df):
 
     **지난달 판매 데이터 샘플:**
     ```
-    {df.head().to_string()}
+    {df[['일자', '거래처명', '제품명', '박스', '합계']].head().to_string()}
     ```
 
     **지난달 주요 성과 지표:**
@@ -122,6 +124,30 @@ def get_low_performer_strategy(model, low_df):
     except Exception as e:
         return f"AI 전략 생성 중 오류가 발생했습니다: {e}"
 
+def get_ai_answer(model, df, question):
+    """AI를 사용하여 사용자의 자연어 질문에 답변합니다."""
+    if model is None:
+        return "AI 모델이 설정되지 않았습니다. 관리자에게 문의하세요."
+    prompt = f"""
+    당신은 '고래미 주식회사'의 판매 데이터를 조회하는 친절한 AI 어시스턴트입니다.
+    아래 제공된 전체 판매 데이터를 참고하여 사용자의 질문에 답변해주세요.
+    **데이터:**
+    ```
+    {df.to_string()}
+    ```
+    **사용자 질문:** {question}
+    **답변 가이드라인:**
+    - 반드시 제공된 데이터에 근거하여 답변해야 합니다.
+    - 데이터에 없는 내용은 '데이터에 정보가 없습니다'라고 명확히 밝혀주세요.
+    - 가능한 한 질문의 요지에 맞게 간결하고 정확하게 답변해주세요.
+    - 계산이 필요한 경우, 직접 계산하여 답변할 수 있습니다.
+    """
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"AI 답변 생성 중 오류가 발생했습니다: {e}"
+
 # --- Streamlit 앱 메인 로직 ---
 st.title("🐳 고래미 주식회사 월간 AI 전략 대시보드")
 
@@ -142,25 +168,30 @@ if uploaded_file is not None:
     try:
         df = pd.read_excel(uploaded_file, sheet_name="판매현황", header=1)
         
-        # 데이터 클리닝 및 전처리
         expected_columns = [
             "일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)",
             "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요",
             "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1",
             "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"
         ]
-        if len(df.columns) < len(expected_columns):
-            st.warning(f"컬럼 수가 예상({len(expected_columns)})보다 적습니다({len(df.columns)}).")
-            df.columns = expected_columns[:len(df.columns)]
+        
+        original_cols = list(df.columns)
+        if len(original_cols) < len(expected_columns):
+            st.warning(f"컬럼 수가 예상({len(expected_columns)})보다 적습니다({len(original_cols)}).")
+            # 컬럼 이름을 있는 만큼만 잘라서 할당
+            df.columns = expected_columns[:len(original_cols)]
         else:
+            # 컬럼 수가 같거나 많으면 예상 컬럼 이름으로 전부 덮어쓰기
             df.columns = expected_columns
 
         numeric_cols = ["박스", "낱개수량", "단가", "공급가액", "부가세", "합계"]
         for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-        df['일자'] = df['일자-No.'].apply(lambda x: str(x).split('-')[0].strip() if pd.notnull(x) else None)
+        df['일자'] = df['일자-No.'].apply(lambda x: str(x).split('-').strip() if pd.notnull(x) else None)
         df['일자'] = pd.to_datetime(df['일자'], errors='coerce', format='%Y/%m/%d')
+        
         df = df.dropna(subset=['품목코드', '일자'])
 
         # *** 제품명 정제 로직 적용 ***
@@ -211,15 +242,14 @@ if uploaded_file is not None:
         st.subheader("📦 품목별 매출 분석 (Top 20)", anchor=False)
         top_products = df.groupby('제품명')['합계'].sum().nlargest(20).reset_index()
 
-        # *** 파이 차트 대신 트리맵 사용 ***
         fig_treemap = px.treemap(top_products,
-                                 path=['제품명'],
+                                 path=[px.Constant("매출 상위 20개 품목"), '제품명'], # 계층 구조 추가
                                  values='합계',
                                  color='합계',
                                  color_continuous_scale='Blues',
                                  title='매출 상위 20개 품목 비중 (트리맵)',
                                  hover_data={'합계': ':,.0f원'})
-        fig_treemap.update_layout(title_x=0.5)
+        fig_treemap.update_layout(title_x=0.5, margin = dict(t=50, l=25, r=25, b=25))
         st.plotly_chart(fig_treemap, use_container_width=True)
 
 
@@ -237,14 +267,12 @@ if uploaded_file is not None:
         
         st.divider()
 
-        # --- 판매 부진 상품 분석 및 마케팅 전략 제안 ---
         st.subheader("📉 판매 부진 상품 분석 및 마케팅 전략", anchor=False)
         
-        # 매출액 기준 하위 10개 품목 추출
         product_sales = df.groupby('제품명')['합계'].sum().reset_index()
         low_performers = product_sales.nsmallest(10, '합계')
         
-        st.dataframe(low_performers, use_container_width=True)
+        st.dataframe(low_performers.style.format({"합계": "{:,.0f} 원"}), use_container_width=True)
         st.info("위는 지난달 매출액 기준 하위 10개 품목입니다. 아래 버튼을 눌러 이 상품들의 판매를 촉진할 마케팅 전략을 확인하세요.")
 
         if st.button("💡 부진 상품 마케팅 전략 생성", key="generate_low_perf_strategy"):
@@ -276,7 +304,6 @@ if uploaded_file is not None:
             if model:
                 with st.spinner('AI가 답변을 찾고 있습니다...'):
                     with st.chat_message("assistant"):
-                        # 질문 답변 시에도 정제된 데이터프레임을 전달
                         ai_answer = get_ai_answer(model, df, user_question)
                         st.markdown(ai_answer)
                         st.session_state.messages.append({"role": "assistant", "content": ai_answer})
@@ -290,28 +317,3 @@ else:
     2.  **지난달 성과 검토:** '지난달 성과 요약' 탭에서 주요 지표와 매출 추이를 확인합니다.
     3.  **다음 달 전략 수립:** '다음 달 AI 전략 리포트' 탭에서 AI가 생성한 종합 전략과 부진 상품 마케팅 아이디어를 확인하여 다음 달 액션 플랜을 수립합니다.
     """)
-
-# 이전 코드의 get_ai_answer 함수를 여기에 추가 (변경 없음)
-def get_ai_answer(model, df, question):
-    """AI를 사용하여 사용자의 자연어 질문에 답변합니다."""
-    if model is None:
-        return "AI 모델이 설정되지 않았습니다. 관리자에게 문의하세요."
-    prompt = f"""
-    당신은 '고래미 주식회사'의 판매 데이터를 조회하는 친절한 AI 어시스턴트입니다.
-    아래 제공된 전체 판매 데이터를 참고하여 사용자의 질문에 답변해주세요.
-    **데이터:**
-    ```
-    {df.to_string()}
-    ```
-    **사용자 질문:** {question}
-    **답변 가이드라인:**
-    - 반드시 제공된 데이터에 근거하여 답변해야 합니다.
-    - 데이터에 없는 내용은 '데이터에 정보가 없습니다'라고 명확히 밝혀주세요.
-    - 가능한 한 질문의 요지에 맞게 간결하고 정확하게 답변해주세요.
-    - 계산이 필요한 경우, 직접 계산하여 답변할 수 있습니다.
-    """
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"AI 답변 생성 중 오류가 발생했습니다: {e}"```
