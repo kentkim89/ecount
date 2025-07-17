@@ -53,7 +53,7 @@ def configure_google_ai(api_key):
 def process_and_analyze_data(df):
     """정제 및 분석용 데이터프레임을 생성하는 중앙 함수"""
     df.dropna(subset=['거래처명', '품목명(규격)', '일자-No.'], inplace=True)
-    df['일자'] = pd.to_datetime(df['일자-No.'].apply(lambda x: str(x).split('-')[0].strip()), errors='coerce')
+    df['일자'] = pd.to_datetime(df['일자-No.'].apply(lambda x: str(x).split('-').strip()), errors='coerce')
     df.dropna(subset=['일자'], inplace=True)
     df['년월'] = df['일자'].dt.to_period('M')
     mask_static = df['품목명(규격)'].str.strip().isin(EXCLUDED_ITEMS)
@@ -101,28 +101,26 @@ except Exception as e:
 with st.sidebar:
     st.header("데이터 관리")
     
-    # 1. 데이터 로드 및 현황 표시
     if conn:
         try:
             existing_data = conn.read(worksheet="판매현황_원본", usecols=list(range(25)), ttl="10s")
             existing_data.columns = ["일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)", "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요", "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1", "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"]
-            existing_data['년월'] = pd.to_datetime(existing_data['일자-No.'].astype(str).str.split('-').str[0], errors='coerce').dt.to_period('M')
+            existing_data['년월'] = pd.to_datetime(existing_data['일자-No.'].astype(str).str.split('-').str.str.strip(), errors='coerce').dt.to_period('M')
             st.info(f"**현재 저장된 데이터:**\n- 총 **{len(existing_data)}** 건\n- 기간: **{existing_data['년월'].min()} ~ {existing_data['년월'].max()}**")
             st.session_state.db_data = existing_data
         except Exception:
             st.warning("`판매현황_원본` 시트를 찾을 수 없습니다. 새 데이터를 업로드하여 시작하세요.")
             st.session_state.db_data = pd.DataFrame()
     
-    # 2. 신규 데이터 업로드
     uploaded_file = st.file_uploader("📂 **신규 월별 데이터**를 업로드하여 추가/수정하세요.", type=["xlsx", "xls"])
     if uploaded_file and conn:
         new_df = pd.read_excel(uploaded_file, sheet_name="판매현황", header=1)
-        new_df.columns = st.session_state.db_data.columns[:len(new_df.columns)] if not st.session_state.db_data.empty else new_df.columns
-        new_df['년월'] = pd.to_datetime(new_df['일자-No.'].astype(str).str.split('-').str[0], errors='coerce').dt.to_period('M')
+        new_df.columns = ["일자-No.", "배송상태", "창고명", "거래처코드", "거래처명", "품목코드", "품목명(규격)", "박스", "낱개수량", "단가", "공급가액", "부가세", "외화금액", "합계", "적요", "쇼핑몰고객명", "시리얼/로트No.", "외포장_여부", "전표상태", "전표상태.1", "추가문자형식2", "포장박스", "추가숫자형식1", "사용자지정숫자1", "사용자지정숫자2"][:len(new_df.columns)]
+        new_df['년월'] = pd.to_datetime(new_df['일자-No.'].astype(str).str.split('-').str.str.strip(), errors='coerce').dt.to_period('M')
         
-        updated_month = new_df['년월'].unique()[0]
+        updated_month = new_df['년월'].dropna().unique()
         
-        if updated_month in st.session_state.db_data['년월'].unique():
+        if 'db_data' in st.session_state and updated_month in st.session_state.db_data['년월'].unique():
             if st.button(f"덮어쓰기: {updated_month} 데이터 업데이트"):
                 existing_data_filtered = st.session_state.db_data[st.session_state.db_data['년월'] != updated_month]
                 updated_df = pd.concat([existing_data_filtered, new_df], ignore_index=True)
@@ -162,7 +160,7 @@ if 'db_data' in st.session_state and not st.session_state.db_data.empty:
                 kpi_data = []
                 for period, df_full, df_analysis in [(selected_prev_month.strftime('%Y-%m'), full_prev_df, prev_df), (selected_curr_month.strftime('%Y-%m'), full_curr_df, curr_df)]:
                     kpi_data.append({'기간': period, '총 공급가액': df_full['공급가액'].sum(), '총 매출': df_full['합계'].sum(), '총 판매 박스': df_analysis['박스'].sum(), '거래처 수': df_analysis['거래처명'].nunique()})
-                prev_kpi, curr_kpi = kpi_data[0], kpi_data[1]
+                prev_kpi, curr_kpi = kpi_data, kpi_data
                 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("총 공급가액", f"{curr_kpi['총 공급가액']:,.0f} 원", f"{curr_kpi['총 공급가액'] - prev_kpi['총 공급가액']:,.0f} 원")
@@ -170,7 +168,6 @@ if 'db_data' in st.session_state and not st.session_state.db_data.empty:
                 c3.metric("총 판매 박스", f"{curr_kpi['총 판매 박스']:,.0f} 개", f"{curr_kpi['총 판매 박스'] - prev_kpi['총 판매 박스']:,.0f} 개")
                 c4.metric("거래처 수", f"{curr_kpi['거래처 수']} 곳", f"{curr_kpi['거래처 수'] - prev_kpi['거래처 수']} 곳")
                 
-                # (이하 비교 분석 테이블 및 차트 로직은 이전과 동일)
                 prev_cust_sales = prev_df.groupby('거래처명')['합계'].sum()
                 curr_cust_sales = curr_df.groupby('거래처명')['합계'].sum()
                 cust_comparison = pd.merge(prev_cust_sales, curr_cust_sales, on='거래처명', how='outer', suffixes=(f'_{selected_prev_month}', f'_{selected_curr_month}')).fillna(0)
@@ -221,4 +218,5 @@ if 'db_data' in st.session_state and not st.session_state.db_data.empty:
     else:
         st.warning("저장된 데이터가 2개월 미만입니다. 데이터를 더 추가하여 비교 분석을 활성화하세요.")
 else:
-    st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하여 분석을 시작하세요.")```
+    # --- 오타 수정된 부분 ---
+    st.info("👈 사이드바에서 판매현황 엑셀 파일을 업로드하여 분석을 시작하세요.")
