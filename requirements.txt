@@ -4,3 +4,4 @@ plotly
 openpyxl
 google-generativeai
 xlsxwriter
+requests
